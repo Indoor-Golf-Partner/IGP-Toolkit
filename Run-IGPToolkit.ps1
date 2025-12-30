@@ -77,7 +77,7 @@ $ModuleRegistry = @(
         Title = "Reset TrackMan Settings"
     },
     @{
-        Path  = "Modules\Display\ResetTouchScreen.ps1"
+        Path  = "Modules\Windows\ResetTouchScreen.ps1"
         Title = "Reset Touch Screen Calibration"
     }
 )
