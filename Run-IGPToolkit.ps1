@@ -79,6 +79,10 @@ $ModuleRegistry = @(
     @{
         Path  = "Modules\Windows\ResetTouchScreen.ps1"
         Title = "Reset Touch Screen Calibration"
+    }, 
+    @{
+        Path  = "Modules\Windows\RepairWindowsImage.ps1"
+        Title = "Repair Windows System Files (DISM + SFC)"
     }
 )
 
