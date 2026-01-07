@@ -88,6 +88,10 @@ $ModuleRegistry = @(
         Path  = "Modules\Windows\autoshutdown.ps1"
         Title = "Manage automatic shutdown"
     }
+    @{
+        Path  = "Modules\Windows\ClearTrackmanCache.ps1"
+        Title = "Clear Trackman Cache"
+    }
 )
 
 
