@@ -91,6 +91,10 @@ $ModuleRegistry = @(
     @{
         Path  = "Modules\Trackman\ClearTrackmanCache.ps1"
         Title = "Clear Trackman Cache"
+    },
+    @{
+        Path  = "Modules\Toolkit\updatetoolkit.ps1"
+        Title = "Update IGP Toolkit"
     }
 )
 
