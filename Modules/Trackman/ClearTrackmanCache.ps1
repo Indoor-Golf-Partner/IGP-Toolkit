@@ -115,8 +115,12 @@ function Clear-TrackmanCache {
 }
 
 function Register-StartupTask {
-    # Deployed script path (as requested)
-    $deployedScript = 'C:\Utilities\IGP-toolkit\ClearTrackmanCache.ps1'
+    # Resolve the actual script path reliably
+    if ([string]::IsNullOrWhiteSpace($PSCommandPath)) {
+        throw "Cannot determine script path (PSCommandPath is empty)."
+    }
+
+    $deployedScript = $PSCommandPath
 
     if (-not (Test-Path -LiteralPath $deployedScript)) {
         Write-Log "Deployed script not found at: $deployedScript" 'ERROR'
