@@ -84,10 +84,10 @@ $ModuleRegistry = @(
         Path  = "Modules\Windows\RepairWindowsImage.ps1"
         Title = "Repair Windows System Files (DISM + SFC)"
     }, 
-    #@{
-    #    Path  = "Modules\Operation\autoshutdown.ps1"
-    #    Title = "Manage automatic shutdown"
-    #}
+    @{
+        Path  = "Modules\Operation\autoshutdown.ps1"
+        Title = "Manage automatic shutdown"
+    },
     @{
         Path  = "Modules\Trackman\ClearTrackmanCache.ps1"
         Title = "Clear Trackman Cache"

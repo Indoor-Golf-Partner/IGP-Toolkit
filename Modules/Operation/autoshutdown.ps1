@@ -113,24 +113,37 @@ function Create-OrReplaceShutdownTask {
         throw "shutdown.exe not found: $shutdownExe"
     }
 
-    $at = [DateTime]::ParseExact($TimeHHmm, "HH:mm", $null)
-    $trigger = New-ScheduledTaskTrigger -Daily -At $at.TimeOfDay
+    # Parse HH:mm reliably
+    $parsed = [datetime]::MinValue
+    $culture = [System.Globalization.CultureInfo]::InvariantCulture
+    if (-not [datetime]::TryParseExact($TimeHHmm, 'HH:mm', $culture, [System.Globalization.DateTimeStyles]::None, [ref]$parsed)) {
+        throw "Invalid time format: '$TimeHHmm' (expected HH:mm)"
+    }
 
-    $action  = New-ScheduledTaskAction -Execute $shutdownExe -Argument "/s /f /t 0"
-    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    # Task Scheduler expects a DateTime for -At (use today with the parsed time)
+    $runAt = Get-Date -Hour $parsed.Hour -Minute $parsed.Minute -Second 0
 
-    $settings = New-ScheduledTaskSettingsSet \
-        -AllowStartIfOnBatteries \
-        -DontStopIfGoingOnBatteries \
-        -StartWhenAvailable \
+    $trigger = New-ScheduledTaskTrigger -Daily -At $runAt
+
+    $action    = New-ScheduledTaskAction -Execute $shutdownExe -Argument '/s /f /t 0'
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+
+    $settings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable `
         -ExecutionTimeLimit (New-TimeSpan -Hours 2)
 
     $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings
 
     Write-Log "Registering task '$name' to shut down daily at $TimeHHmm..."
-    Register-ScheduledTask -TaskName $name -InputObject $task -Force -ErrorAction Stop | Out-Null
-
-    Write-Log "Task created successfully."
+    try {
+        Register-ScheduledTask -TaskName $name -InputObject $task -Force -ErrorAction Stop | Out-Null
+        Write-Log "Task created successfully."
+    }
+    catch {
+        throw "Failed to register scheduled task '$name': $($_.Exception.Message)"
+    }
 }
 
 function Disable-ShutdownTaskIfExists {
