@@ -356,14 +356,14 @@ function Get-IGPSetupOverview {
 
     $status = 'Unknown'
 
-    # Build desired text with optional human-readable labels
+    # Build desired text as human-readable labels (fallback to raw if no label)
     $desiredParts = @()
     foreach ($dv in @($s.DesiredValues)) {
       $lbl = Get-ValueLabel -Spec $s -Value $dv
       if ([string]::IsNullOrWhiteSpace($lbl)) {
         $desiredParts += "$dv"
       } else {
-        $desiredParts += ("{0} ({1})" -f $dv, $lbl)
+        $desiredParts += $lbl
       }
     }
     $desiredText = ($desiredParts -join ' | ')
@@ -380,6 +380,7 @@ function Get-IGPSetupOverview {
       }
     }
 
+    # Build actual text as human-readable label (fallback to raw if no label)
     $actualLabel = Get-ValueLabel -Spec $s -Value $actual
     $actualText = ''
     if ($null -eq $actual) {
@@ -387,18 +388,19 @@ function Get-IGPSetupOverview {
     } elseif ([string]::IsNullOrWhiteSpace($actualLabel)) {
       $actualText = "$actual"
     } else {
-      $actualText = ("{0} ({1})" -f $actual, $actualLabel)
+      $actualText = $actualLabel
     }
+
+    $statusIcon = '❓'
+    if ($status -eq 'OK') { $statusIcon = '✅' }
+    elseif ($status -eq 'Mismatch') { $statusIcon = '❌' }
 
     $baselineReport += [pscustomobject]@{
       Order    = $s.Order
       Name     = $s.Name
-      Severity = $s.Severity
-      Keyword  = $foundKey
-      Status   = $status
-      Actual        = $actual
-      ActualLabel   = $actualText
-      Desired       = $desiredText
+      Status   = $statusIcon
+      Value    = $actualText
+      Desired  = $desiredText
       Notes    = $s.Notes
       Remedy   = $s.Remediation
     }
@@ -455,7 +457,7 @@ function Show-IGPSetupOverview {
   if ($o.Network.BaselineReport -and $o.Network.BaselineReport.Count -gt 0) {
     $o.Network.BaselineReport |
       Sort-Object Order |
-      Select-Object Severity, Status, Name, ActualLabel, Desired, Keyword |
+      Select-Object Name, Value, Desired, Status |
       Format-Table -AutoSize
 
     Write-Host ""
