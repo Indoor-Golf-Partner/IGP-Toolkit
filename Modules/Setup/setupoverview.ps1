@@ -73,10 +73,15 @@ function Get-AdapterVendor {
 function Import-NetworkBaselineSpec {
   # Loads Modules/Setup/network/values.ps1 and returns spec array.
 
-  $path = $MyInvocation.MyCommand.Path
-  if ([string]::IsNullOrWhiteSpace($path)) { return @() }
+  # Prefer $PSScriptRoot for script-relative paths (works when dot-sourced)
+  $thisDir = $PSScriptRoot
 
-  $thisDir = Split-Path -Parent $path
+  if ([string]::IsNullOrWhiteSpace($thisDir)) {
+    $path = $PSCommandPath
+    if ([string]::IsNullOrWhiteSpace($path)) { return @() }
+    $thisDir = Split-Path -Parent $path
+  }
+
   $specPath = Join-Path $thisDir 'network\values.ps1'
 
   if (-not (Test-Path -LiteralPath $specPath)) { return @() }
@@ -329,7 +334,7 @@ function Get-IGPSetupOverview {
         foreach ($dv in @($s.DesiredValues)) {
           if ("$actual" -eq "$dv") { $ok = $true; break }
         }
-        $status = (if ($ok) { 'OK' } else { 'Mismatch' })
+        if ($ok) { $status = 'OK' } else { $status = 'Mismatch' }
       }
     }
 
