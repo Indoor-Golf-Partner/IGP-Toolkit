@@ -14,7 +14,7 @@
 #>
 
 
- 
+
 [CmdletBinding()]
 param(
   # Optional: explicitly choose adapter name (otherwise auto-picks primary Ethernet adapter)
@@ -197,97 +197,19 @@ function Get-IGPSetupOverview {
     }
   }
 
-  # Desired baselines for now (we can extend later)
-  # Note: values differ by driver; we allow multiple accepted strings.
-  $desired = @{
-    SpeedDuplex = @(
-      '1.0 Gbps Full Duplex',
-      '1.0Gbps Full Duplex',
-      '1.0 Gbps Full',
-      '1 Gbps Full Duplex',
-      'Auto Negotiation' # keep as allowed if you decide to not force 1G
-    )
-    EnergyEfficientEthernet = @('Disabled','Off')
-    GreenEthernet           = @('Disabled','Off')
-    PowerSavingMode         = @('Disabled','Off')
-    InterruptModeration     = @('Enabled','On')
-    ReceiveSideScaling      = @('Enabled','On')
-    # Jumbo is site/profile-dependent; treat "Unknown" as acceptable for now.
+  # Collect ALL advanced NIC properties (language-independent fields included)
+  $allProps = @()
+
+  if (Test-CommandExists -Name 'Get-NetAdapterAdvancedProperty') {
+    try {
+      $allProps = Get-NetAdapterAdvancedProperty -Name $adapter.Name -ErrorAction Stop |
+        Select-Object DisplayName, DisplayValue, RegistryKeyword, RegistryValue
+    } catch {
+      $allProps = @()
+    }
   }
-
-  $ifaceDesc = $adapter.InterfaceDescription
-
-  $speed = Get-NicAdvancedPropertyValue -InterfaceDescription $ifaceDesc -DisplayNames @(
-    'Speed & Duplex',
-    'Speed and Duplex'
-  )
-
-  $eee = Get-NicAdvancedPropertyValue -InterfaceDescription $ifaceDesc -DisplayNames @(
-    'Energy Efficient Ethernet',
-    'EEE'
-  )
-
-  $green = Get-NicAdvancedPropertyValue -InterfaceDescription $ifaceDesc -DisplayNames @(
-    'Green Ethernet'
-  )
-
-  $psm = Get-NicAdvancedPropertyValue -InterfaceDescription $ifaceDesc -DisplayNames @(
-    'Power Saving Mode',
-    'Power Saving'
-  )
-
-  $im = Get-NicAdvancedPropertyValue -InterfaceDescription $ifaceDesc -DisplayNames @(
-    'Interrupt Moderation'
-  )
-
-  $rss = Get-NicAdvancedPropertyValue -InterfaceDescription $ifaceDesc -DisplayNames @(
-    'Receive Side Scaling',
-    'Receive Side Scaling (RSS)'
-  )
-
-  $jumbo = Get-JumboPacketStatus -InterfaceDescription $ifaceDesc
 
   $ipv6Enabled = Get-NetBindingState -AdapterName $adapter.Name -ComponentId 'ms_tcpip6'
-
-  $checks = [ordered]@{}
-
-  $speedVal = if ($null -ne $speed) { $speed.DisplayValue } else { $null }
-  $eeeVal   = if ($null -ne $eee)   { $eee.DisplayValue }   else { $null }
-  $greenVal = if ($null -ne $green) { $green.DisplayValue } else { $null }
-  $psmVal   = if ($null -ne $psm)   { $psm.DisplayValue }   else { $null }
-  $imVal    = if ($null -ne $im)    { $im.DisplayValue }    else { $null }
-  $rssVal   = if ($null -ne $rss)   { $rss.DisplayValue }   else { $null }
-
-  $checks['Speed & Duplex'] = Compare-Desired -Actual $speedVal -Desired $desired.SpeedDuplex
-  $checks['Energy Efficient Ethernet'] = Compare-Desired -Actual $eeeVal -Desired $desired.EnergyEfficientEthernet
-  $checks['Green Ethernet'] = Compare-Desired -Actual $greenVal -Desired $desired.GreenEthernet
-  $checks['Power Saving Mode'] = Compare-Desired -Actual $psmVal -Desired $desired.PowerSavingMode
-  $checks['Interrupt Moderation'] = Compare-Desired -Actual $imVal -Desired $desired.InterruptModeration
-  $checks['Receive Side Scaling'] = Compare-Desired -Actual $rssVal -Desired $desired.ReceiveSideScaling
-
-  # IPv6 baseline depends on your stance. Here we just report state.
-  $ipv6Status = if ($null -eq $ipv6Enabled) {
-    'Unknown'
-  } elseif ($ipv6Enabled -eq $true) {
-    'Enabled'
-  } else {
-    'Disabled'
-  }
-
-  $checks['IPv6 Binding (ms_tcpip6)'] = [pscustomobject]@{
-    Status  = $ipv6Status
-    Actual  = $ipv6Enabled
-    Desired = $null
-  }
-
-  # Jumbo frame: report only (profile-based)
-  $jumboStatus = if ($jumbo.Present) { 'Present' } else { 'NotPresent' }
-
-  $checks['Jumbo Packet'] = [pscustomobject]@{
-    Status  = $jumboStatus
-    Actual  = $jumbo.Value
-    Desired = $null
-  }
 
   return [pscustomobject]@{
     Timestamp    = (Get-Date)
@@ -302,7 +224,8 @@ function Get-IGPSetupOverview {
         MacAddress           = $adapter.MacAddress
         ifIndex              = $adapter.ifIndex
       }
-      Checks = [pscustomobject]$checks
+      IPv6Enabled = $ipv6Enabled
+      AdvancedProperties = $allProps
     }
   }
 }
@@ -330,17 +253,17 @@ function Show-IGPSetupOverview {
   Write-Host "Adapter: $($o.Network.Adapter.Name) | $($o.Network.Adapter.InterfaceDescription) | $($o.Network.Adapter.Status) | $($o.Network.Adapter.LinkSpeed)"
   Write-Host ""
 
-  $rows = foreach ($k in $o.Network.Checks.PSObject.Properties.Name) {
-    $c = $o.Network.Checks.$k
-    [pscustomobject]@{
-      Setting = $k
-      Status  = $c.Status
-      Actual  = $c.Actual
-      Desired = if ($null -eq $c.Desired) { '' } elseif ($c.Desired -is [System.Collections.IEnumerable] -and -not ($c.Desired -is [string])) { ($c.Desired -join ' | ') } else { $c.Desired }
-    }
+  Write-Host "IPv6 Enabled: $($o.Network.IPv6Enabled)"
+  Write-Host ""
+
+  if (-not $o.Network.AdvancedProperties -or $o.Network.AdvancedProperties.Count -eq 0) {
+    Write-Host "No advanced adapter properties found." -ForegroundColor Yellow
+    return
   }
 
-  $rows | Format-Table -AutoSize
+  $o.Network.AdvancedProperties |
+    Sort-Object DisplayName |
+    Format-Table DisplayName, DisplayValue, RegistryKeyword, RegistryValue -AutoSize
 }
 
 
