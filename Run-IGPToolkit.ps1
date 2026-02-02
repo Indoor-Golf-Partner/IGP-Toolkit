@@ -95,6 +95,10 @@ $ModuleRegistry = @(
     @{
         Path  = "Modules\Toolkit\updatetoolkit.ps1"
         Title = "Update IGP Toolkit"
+    },
+    @{
+        Path  = "Modules\Setup\setupoverview.ps1"
+        Title = "Setup Overview"
     }
 )
 
