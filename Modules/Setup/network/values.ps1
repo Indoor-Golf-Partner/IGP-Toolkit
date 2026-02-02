@@ -89,7 +89,7 @@ function Get-IGPNetworkBaselineSpec {
     Category          = 'Network'
     RegistryKeyword   = '*JumboPacket'
     AlternateKeywords = @('JumboPacket','Jumbo Frame','Jumbo Frames')
-    DesiredValues     = @(1514)   # Realtek uses 1514 for "disabled" (standard frame size)
+    DesiredValues     = @(9014)   # Realtek uses 1514 for "disabled" (standard frame size)
     ValueNames        = @{ 1514 = 'Disabled (1514)'; 9014 = 'Jumbo 9K (9014)'; 4088 = 'Jumbo 4K (4088)' }
     Severity          = 'Warn'
     AppliesTo         = @{ Vendor = 'Realtek' }
@@ -104,7 +104,16 @@ function Get-IGPNetworkBaselineSpec {
     RegistryKeyword   = '*SpeedDuplex'
     AlternateKeywords = @('SpeedDuplex')
     DesiredValues     = @(0)      # 0 = Auto Negotiation on observed Realtek driver
-    ValueNames        = @{ 0 = 'Auto Negotiation' }
+    ValueNames        = @{
+      0 = 'Auto Negotiation'
+      1 = '10 Mbps Half Duplex'
+      2 = '10 Mbps Full Duplex'
+      3 = '100 Mbps Half Duplex'
+      4 = '100 Mbps Full Duplex'
+      5 = '1.0 Gbps Half Duplex'
+      6 = '1.0 Gbps Full Duplex'
+      7 = '2.5 Gbps Full Duplex'
+    }
     Severity          = 'Warn'
     AppliesTo         = @{ Vendor = 'Realtek' }
     Remediation       = 'Policy decision: allow Auto, or force 1.0 Gbps Full Duplex if needed for stability.'
