@@ -1,5 +1,3 @@
-
-
 <#
 .SYNOPSIS
   Network baseline specification for IGP Toolkit.
@@ -19,6 +17,7 @@
     RegistryKeyword  : Primary NIC advanced property keyword (e.g. *EEE)
     AlternateKeywords: Optional list of alternate keywords for other vendors/drivers
     DesiredValues    : Array of allowed desired registry values (numbers or strings)
+    ValueNames       : Hashtable mapping registry values to human-readable labels
     Severity         : Info | Warn | Error
     AppliesTo        : Hashtable filters (e.g. Vendor='Realtek')
     Remediation      : Human hint for how to fix
@@ -49,6 +48,7 @@ function Get-IGPNetworkBaselineSpec {
     RegistryKeyword   = '*EEE'
     AlternateKeywords = @('AdvancedEEE','EEE')
     DesiredValues     = @(0)      # 0 = disabled
+    ValueNames        = @{ 0 = 'Disabled'; 1 = 'Enabled' }
     Severity          = 'Error'
     AppliesTo         = @{ Vendor = 'Realtek' }
     Remediation       = 'Disable EEE in NIC advanced properties.'
@@ -62,6 +62,7 @@ function Get-IGPNetworkBaselineSpec {
     RegistryKeyword   = 'EnableGreenEthernet'
     AlternateKeywords = @('GreenEthernet','*GreenEthernet')
     DesiredValues     = @(0)      # 0 = disabled, 1 = enabled
+    ValueNames        = @{ 0 = 'Disabled'; 1 = 'Enabled' }
     Severity          = 'Error'
     AppliesTo         = @{ Vendor = 'Realtek' }
     Remediation       = 'Disable Green Ethernet in NIC advanced properties.'
@@ -75,6 +76,7 @@ function Get-IGPNetworkBaselineSpec {
     RegistryKeyword   = 'PowerSavingMode'
     AlternateKeywords = @('*PowerSavingMode')
     DesiredValues     = @(0)      # 0 = disabled, 1 = enabled
+    ValueNames        = @{ 0 = 'Disabled'; 1 = 'Enabled' }
     Severity          = 'Error'
     AppliesTo         = @{ Vendor = 'Realtek' }
     Remediation       = 'Disable Power Saving Mode in NIC advanced properties.'
@@ -88,6 +90,7 @@ function Get-IGPNetworkBaselineSpec {
     RegistryKeyword   = '*JumboPacket'
     AlternateKeywords = @('JumboPacket','Jumbo Frame','Jumbo Frames')
     DesiredValues     = @(1514)   # Realtek uses 1514 for "disabled" (standard frame size)
+    ValueNames        = @{ 1514 = 'Disabled (1514)'; 9014 = 'Jumbo 9K (9014)'; 4088 = 'Jumbo 4K (4088)' }
     Severity          = 'Warn'
     AppliesTo         = @{ Vendor = 'Realtek' }
     Remediation       = 'Keep Jumbo Frame disabled unless the entire network path supports jumbo MTU.'
@@ -101,6 +104,7 @@ function Get-IGPNetworkBaselineSpec {
     RegistryKeyword   = '*SpeedDuplex'
     AlternateKeywords = @('SpeedDuplex')
     DesiredValues     = @(0)      # 0 = Auto Negotiation on observed Realtek driver
+    ValueNames        = @{ 0 = 'Auto Negotiation' }
     Severity          = 'Warn'
     AppliesTo         = @{ Vendor = 'Realtek' }
     Remediation       = 'Policy decision: allow Auto, or force 1.0 Gbps Full Duplex if needed for stability.'
@@ -114,6 +118,7 @@ function Get-IGPNetworkBaselineSpec {
     RegistryKeyword   = '*InterruptModeration'
     AlternateKeywords = @('InterruptModeration')
     DesiredValues     = @(1)      # 1 = enabled on observed driver
+    ValueNames        = @{ 0 = 'Disabled'; 1 = 'Enabled' }
     Severity          = 'Info'
     AppliesTo         = @{ Vendor = 'Realtek' }
     Remediation       = 'Enable Interrupt Moderation (usually default).'
@@ -127,6 +132,7 @@ function Get-IGPNetworkBaselineSpec {
     RegistryKeyword   = '*RSS'
     AlternateKeywords = @('*Rsc','ReceiveSideScaling','*ReceiveSideScaling')
     DesiredValues     = @(1)      # Commonly 1 = enabled
+    ValueNames        = @{ 0 = 'Disabled'; 1 = 'Enabled' }
     Severity          = 'Info'
     AppliesTo         = @{ Vendor = 'Realtek' }
     Remediation       = 'Enable RSS (usually default).'

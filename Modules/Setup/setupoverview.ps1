@@ -57,6 +57,41 @@ function Get-ScalarRegistryValue {
   return $Value
 }
 
+function Get-ValueLabel {
+  param(
+    [Parameter(Mandatory)]$Spec,
+    [AllowNull()]$Value
+  )
+
+  if ($null -eq $Value) { return $null }
+
+  if ($Spec -and $Spec.PSObject.Properties.Name -contains 'ValueNames' -and $Spec.ValueNames) {
+    try {
+      # Hashtable keys may be int or string; try both.
+      if ($Spec.ValueNames.ContainsKey($Value)) {
+        return "$($Spec.ValueNames[$Value])"
+      }
+
+      $sv = "$Value"
+      if ($Spec.ValueNames.ContainsKey($sv)) {
+        return "$($Spec.ValueNames[$sv])"
+      }
+
+      # Try numeric conversion if the value is a string.
+      $iv = $null
+      if ([int]::TryParse($sv, [ref]$iv)) {
+        if ($Spec.ValueNames.ContainsKey($iv)) {
+          return "$($Spec.ValueNames[$iv])"
+        }
+      }
+    } catch {
+      # ignore
+    }
+  }
+
+  return $null
+}
+
 function Get-AdapterVendor {
   param([Parameter(Mandatory)]$Adapter)
 
@@ -320,11 +355,18 @@ function Get-IGPSetupOverview {
     }
 
     $status = 'Unknown'
-    $desiredText = ''
 
-    if ($s.DesiredValues) {
-      $desiredText = (@($s.DesiredValues) -join ' | ')
+    # Build desired text with optional human-readable labels
+    $desiredParts = @()
+    foreach ($dv in @($s.DesiredValues)) {
+      $lbl = Get-ValueLabel -Spec $s -Value $dv
+      if ([string]::IsNullOrWhiteSpace($lbl)) {
+        $desiredParts += "$dv"
+      } else {
+        $desiredParts += ("{0} ({1})" -f $dv, $lbl)
+      }
     }
+    $desiredText = ($desiredParts -join ' | ')
 
     if ($null -ne $foundKey) {
       if ($null -eq $actual) {
@@ -338,14 +380,25 @@ function Get-IGPSetupOverview {
       }
     }
 
+    $actualLabel = Get-ValueLabel -Spec $s -Value $actual
+    $actualText = ''
+    if ($null -eq $actual) {
+      $actualText = ''
+    } elseif ([string]::IsNullOrWhiteSpace($actualLabel)) {
+      $actualText = "$actual"
+    } else {
+      $actualText = ("{0} ({1})" -f $actual, $actualLabel)
+    }
+
     $baselineReport += [pscustomobject]@{
       Order    = $s.Order
       Name     = $s.Name
       Severity = $s.Severity
       Keyword  = $foundKey
       Status   = $status
-      Actual   = $actual
-      Desired  = $desiredText
+      Actual        = $actual
+      ActualLabel   = $actualText
+      Desired       = $desiredText
       Notes    = $s.Notes
       Remedy   = $s.Remediation
     }
@@ -402,7 +455,7 @@ function Show-IGPSetupOverview {
   if ($o.Network.BaselineReport -and $o.Network.BaselineReport.Count -gt 0) {
     $o.Network.BaselineReport |
       Sort-Object Order |
-      Select-Object Severity, Status, Name, Actual, Desired, Keyword |
+      Select-Object Severity, Status, Name, ActualLabel, Desired, Keyword |
       Format-Table -AutoSize
 
     Write-Host ""
