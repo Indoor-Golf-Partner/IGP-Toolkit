@@ -156,8 +156,10 @@ function Compare-Desired {
     $ok = ("$Actual" -eq "$Desired")
   }
 
+  $status = if ($ok) { 'OK' } else { 'Mismatch' }
+
   return [pscustomobject]@{
-    Status  = ($ok ? 'OK' : 'Mismatch')
+    Status  = $status
     Actual  = $Actual
     Desired = $Desired
   }
@@ -249,23 +251,40 @@ function Get-IGPSetupOverview {
 
   $checks = [ordered]@{}
 
-  $checks['Speed & Duplex'] = Compare-Desired -Actual ($speed?.DisplayValue) -Desired $desired.SpeedDuplex
-  $checks['Energy Efficient Ethernet'] = Compare-Desired -Actual ($eee?.DisplayValue) -Desired $desired.EnergyEfficientEthernet
-  $checks['Green Ethernet'] = Compare-Desired -Actual ($green?.DisplayValue) -Desired $desired.GreenEthernet
-  $checks['Power Saving Mode'] = Compare-Desired -Actual ($psm?.DisplayValue) -Desired $desired.PowerSavingMode
-  $checks['Interrupt Moderation'] = Compare-Desired -Actual ($im?.DisplayValue) -Desired $desired.InterruptModeration
-  $checks['Receive Side Scaling'] = Compare-Desired -Actual ($rss?.DisplayValue) -Desired $desired.ReceiveSideScaling
+  $speedVal = if ($null -ne $speed) { $speed.DisplayValue } else { $null }
+  $eeeVal   = if ($null -ne $eee)   { $eee.DisplayValue }   else { $null }
+  $greenVal = if ($null -ne $green) { $green.DisplayValue } else { $null }
+  $psmVal   = if ($null -ne $psm)   { $psm.DisplayValue }   else { $null }
+  $imVal    = if ($null -ne $im)    { $im.DisplayValue }    else { $null }
+  $rssVal   = if ($null -ne $rss)   { $rss.DisplayValue }   else { $null }
+
+  $checks['Speed & Duplex'] = Compare-Desired -Actual $speedVal -Desired $desired.SpeedDuplex
+  $checks['Energy Efficient Ethernet'] = Compare-Desired -Actual $eeeVal -Desired $desired.EnergyEfficientEthernet
+  $checks['Green Ethernet'] = Compare-Desired -Actual $greenVal -Desired $desired.GreenEthernet
+  $checks['Power Saving Mode'] = Compare-Desired -Actual $psmVal -Desired $desired.PowerSavingMode
+  $checks['Interrupt Moderation'] = Compare-Desired -Actual $imVal -Desired $desired.InterruptModeration
+  $checks['Receive Side Scaling'] = Compare-Desired -Actual $rssVal -Desired $desired.ReceiveSideScaling
 
   # IPv6 baseline depends on your stance. Here we just report state.
+  $ipv6Status = if ($null -eq $ipv6Enabled) {
+    'Unknown'
+  } elseif ($ipv6Enabled -eq $true) {
+    'Enabled'
+  } else {
+    'Disabled'
+  }
+
   $checks['IPv6 Binding (ms_tcpip6)'] = [pscustomobject]@{
-    Status  = ($null -eq $ipv6Enabled) ? 'Unknown' : (($ipv6Enabled -eq $true) ? 'Enabled' : 'Disabled')
+    Status  = $ipv6Status
     Actual  = $ipv6Enabled
     Desired = $null
   }
 
   # Jumbo frame: report only (profile-based)
+  $jumboStatus = if ($jumbo.Present) { 'Present' } else { 'NotPresent' }
+
   $checks['Jumbo Packet'] = [pscustomobject]@{
-    Status  = ($jumbo.Present ? 'Present' : 'NotPresent')
+    Status  = $jumboStatus
     Actual  = $jumbo.Value
     Desired = $null
   }
@@ -325,7 +344,7 @@ function Show-IGPSetupOverview {
 }
 
 
-function Run-Module {
+function RunModule {
   if ($AsJson) {
     Show-IGPSetupOverview -AdapterName $AdapterName -AsJson
   } else {
@@ -335,5 +354,5 @@ function Run-Module {
 
 # If executed directly (not dot-sourced), run the module.
 if ($MyInvocation.InvocationName -ne '.') {
-  Run-Module
+  RunModule
 }
