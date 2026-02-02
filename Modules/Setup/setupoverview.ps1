@@ -391,14 +391,14 @@ function Get-IGPSetupOverview {
       $actualText = $actualLabel
     }
 
-    $statusIcon = '❓'
-    if ($status -eq 'OK') { $statusIcon = '✅' }
-    elseif ($status -eq 'Mismatch') { $statusIcon = '❌' }
+    $statusText = 'UNKNOWN'
+    if ($status -eq 'OK') { $statusText = 'OK' }
+    elseif ($status -eq 'Mismatch') { $statusText = 'NOT OK' }
 
     $baselineReport += [pscustomobject]@{
       Order    = $s.Order
       Name     = $s.Name
-      Status   = $statusIcon
+      Status   = $statusText
       Value    = $actualText
       Desired  = $desiredText
       Notes    = $s.Notes
@@ -457,7 +457,7 @@ function Show-IGPSetupOverview {
   if ($o.Network.BaselineReport -and $o.Network.BaselineReport.Count -gt 0) {
     $o.Network.BaselineReport |
       Sort-Object Order |
-      Select-Object Name, Value, Desired, Status |
+      Select-Object Name, Value, @{Name='Desired value';Expression={$_.Desired}}, Status |
       Format-Table -AutoSize
 
     Write-Host ""
