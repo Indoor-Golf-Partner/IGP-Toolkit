@@ -136,6 +136,7 @@ function Get-EligibleEthernetAdapters {
   return @($filtered | Sort-Object -Property ifIndex)
 }
 
+
 function Format-AdapterLabel {
   param(
     [Parameter(Mandatory)]$Adapter,
@@ -146,6 +147,59 @@ function Format-AdapterLabel {
   if ($Vendor -eq 'Realtek') { $desc = "$desc (Trackman?)" }
 
   return "{0} | {1} | {2} | {3}" -f $Adapter.Name, $desc, $Adapter.Status, $Adapter.LinkSpeed
+}
+
+
+function Select-NetworkAdapterFromMenu {
+  <#
+    Interactive picker for eligible Ethernet adapters.
+
+    If running non-interactively, falls back to the primary Ethernet adapter.
+  #>
+
+  $adapters = @(Get-EligibleEthernetAdapters)
+  if ($null -eq $adapters -or @($adapters).Count -eq 0) {
+    return (Get-PrimaryEthernetAdapter)
+  }
+
+  # Prefer Realtek first (Trackman?), then other onboard-like, then the rest.
+  $scored = foreach ($a in $adapters) {
+    $vendor = Get-AdapterVendor -Adapter $a
+
+    # Simple scoring heuristic:
+    #  0: Realtek
+    #  1: Others
+    $score = 1
+    if ($vendor -eq 'Realtek') { $score = 0 }
+
+    # Prefer Up adapters within each group
+    $upScore = 1
+    if ($a.Status -eq 'Up') { $upScore = 0 }
+
+    [pscustomobject]@{ Adapter=$a; Vendor=$vendor; Score=$score; UpScore=$upScore }
+  }
+
+  $ordered = @($scored | Sort-Object -Property Score, UpScore, @{Expression={ $_.Adapter.ifIndex }} )
+
+  Write-Host ''
+  Write-Host 'Select network adapter to apply settings:'
+
+  for ($i = 0; $i -lt $ordered.Count; $i++) {
+    $a = $ordered[$i].Adapter
+    $vendor = $ordered[$i].Vendor
+    $label = Format-AdapterLabel -Adapter $a -Vendor $vendor
+    Write-Host ("[{0}] {1}" -f ($i + 1), $label)
+  }
+
+  Write-Host ''
+  $choice = Read-Host 'Enter number (or press Enter to cancel)'
+  if ([string]::IsNullOrWhiteSpace($choice)) { return $null }
+
+  $n = $null
+  if (-not [int]::TryParse($choice, [ref]$n)) { return $null }
+  if ($n -lt 1 -or $n -gt $ordered.Count) { return $null }
+
+  return $ordered[$n - 1].Adapter
 }
 
 
