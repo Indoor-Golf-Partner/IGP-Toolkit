@@ -90,33 +90,57 @@ function Import-NetworkBaselineSpec {
   try { return @(Get-IGPNetworkBaselineSpec) } catch { return @() }
 }
 
-function Get-PrimaryEthernetAdapter {
+function Get-OnboardEthernetAdapters {
   <#
-    Returns the "best" Ethernet adapter candidate:
-    1) If a net adapter named "Ethernet" exists, use it.
-    2) Else prefer adapters that are Up.
-    3) Else pick the lowest ifIndex.
+    Returns all likely onboard/PCIe Ethernet adapters.
+
+    Excludes:
+      - Wi-Fi / WLAN / 802.11
+      - Bluetooth
+      - USB NICs
+      - Virtual adapters
+
+    Notes:
+      - Uses MediaType (802.3) when available.
+      - Uses PnPDeviceID prefix to exclude USB.
   #>
 
-  if (-not (Test-CommandExists -Name 'Get-NetAdapter')) { return $null }
+  if (-not (Test-CommandExists -Name 'Get-NetAdapter')) { return @() }
 
   try {
     $all = Get-NetAdapter -Physical -ErrorAction Stop | Where-Object {
-      $_.Status -ne 'Disabled' -and $_.HardwareInterface -eq $true
+      $_.HardwareInterface -eq $true -and $_.Status -ne 'Disabled'
     }
   } catch {
-    return $null
+    return @()
   }
 
-  if (-not $all -or $all.Count -eq 0) { return $null }
+  if (-not $all -or $all.Count -eq 0) { return @() }
 
-  $exact = $all | Where-Object { $_.Name -eq 'Ethernet' } | Select-Object -First 1
-  if ($exact) { return $exact }
+  $filtered = $all | Where-Object {
+    $desc = "$($_.InterfaceDescription)"
+    $name = "$($_.Name)"
+    $pnp  = "$($_.PnPDeviceID)"
 
-  $up = $all | Where-Object { $_.Status -eq 'Up' } | Sort-Object -Property ifIndex | Select-Object -First 1
-  if ($up) { return $up }
+    # Exclude obvious wireless/bluetooth
+    ($desc -notmatch '(?i)wi-?fi|wireless|wlan|802\.11|bluetooth') -and
+    ($name -notmatch '(?i)wi-?fi|wireless|wlan|bluetooth') -and
 
-  return ($all | Sort-Object -Property ifIndex | Select-Object -First 1)
+    # Exclude virtual
+    ($desc -notmatch '(?i)virtual|hyper-?v|vmware|vbox|tap|tunneling|loopback') -and
+    ($name -notmatch '(?i)vEthernet|virtual|hyper-?v|vmware|vbox|tap') -and
+
+    # Exclude USB NICs
+    ($pnp -notmatch '^(?i)usb')
+  }
+
+  # Prefer 802.3 (Ethernet) when MediaType exists and is populated
+  $ether = $filtered | Where-Object {
+    $mt = "$($_.MediaType)"
+    if ([string]::IsNullOrWhiteSpace($mt)) { $true } else { $mt -eq '802.3' }
+  }
+
+  return @($ether | Sort-Object -Property ifIndex)
 }
 
 function Get-NicAdvancedPropertyValue {
@@ -164,138 +188,144 @@ function Get-NetBindingState {
 
 function Get-NetworkStatus {
   [CmdletBinding()]
-  param(
-    [string]$AdapterName
-  )
+  param()
 
-  $adapter = $null
+  $adapters = Get-OnboardEthernetAdapters
 
-  if (-not (Test-CommandExists -Name 'Get-NetAdapter')) {
+  if (-not $adapters -or $adapters.Count -eq 0) {
     return [pscustomobject]@{
       Timestamp    = (Get-Date)
       ComputerName = $env:COMPUTERNAME
-      Network      = [pscustomobject]@{ Available = $false; Reason = 'NetAdapter cmdlets not available' }
+      Network      = [pscustomobject]@{ Available = $false; Reason = 'No suitable onboard/PCIe Ethernet adapters found' }
     }
   }
 
-  if ($AdapterName) {
-    try { $adapter = Get-NetAdapter -Name $AdapterName -ErrorAction Stop } catch { $adapter = $null }
-  }
-  if (-not $adapter) { $adapter = Get-PrimaryEthernetAdapter }
-
-  if (-not $adapter) {
-    return [pscustomobject]@{
-      Timestamp    = (Get-Date)
-      ComputerName = $env:COMPUTERNAME
-      Network      = [pscustomobject]@{ Available = $false; Reason = 'No suitable physical adapter found' }
-    }
-  }
-
-  $vendor = Get-AdapterVendor -Adapter $adapter
   $baselineSpec = Import-NetworkBaselineSpec
 
-  # Build a map: keyword -> { Value, DisplayName, DisplayValue }
-  $propMap = @{}
+  $adapterReports = @()
 
-  # Collect ALL advanced NIC properties (language-independent fields included)
-  $allProps = @()
+  foreach ($adapter in $adapters) {
+    $vendor = Get-AdapterVendor -Adapter $adapter
 
-  if (Test-CommandExists -Name 'Get-NetAdapterAdvancedProperty') {
-    try {
-      $allProps = Get-NetAdapterAdvancedProperty -Name $adapter.Name -ErrorAction Stop |
-        Select-Object DisplayName, DisplayValue, RegistryKeyword, RegistryValue
+    # Build a map: keyword -> { Value, DisplayName, DisplayValue }
+    $propMap = @{}
 
-      foreach ($p in $allProps) {
-        $k = "$($p.RegistryKeyword)".Trim()
+    # Collect ALL advanced NIC properties (language-independent fields included)
+    $allProps = @()
+
+    if (Test-CommandExists -Name 'Get-NetAdapterAdvancedProperty') {
+      try {
+        $allProps = Get-NetAdapterAdvancedProperty -Name $adapter.Name -ErrorAction Stop |
+          Select-Object DisplayName, DisplayValue, RegistryKeyword, RegistryValue
+
+        foreach ($p in $allProps) {
+          $k = "$($p.RegistryKeyword)".Trim()
+          if ([string]::IsNullOrWhiteSpace($k)) { continue }
+
+          $propMap[$k] = [pscustomobject]@{
+            Value        = (Get-ScalarRegistryValue -Value $p.RegistryValue)
+            DisplayName  = $p.DisplayName
+            DisplayValue = $p.DisplayValue
+          }
+        }
+      } catch {
+        $allProps = @()
+      }
+    }
+
+    $ipv6Enabled = Get-NetBindingState -AdapterName $adapter.Name -ComponentId 'ms_tcpip6'
+
+    $baselineReport = @()
+
+    foreach ($s in ($baselineSpec | Sort-Object Order)) {
+      # AppliesTo filtering (only Vendor for now)
+      $applies = $true
+      if ($s.AppliesTo -and $s.AppliesTo.ContainsKey('Vendor')) {
+        $wantVendor = "$($s.AppliesTo.Vendor)"
+        if (-not [string]::IsNullOrWhiteSpace($wantVendor)) {
+          $applies = ($vendor -eq $wantVendor)
+        }
+      }
+      if (-not $applies) { continue }
+
+      $keywordsToTry = @()
+      if (-not [string]::IsNullOrWhiteSpace($s.RegistryKeyword)) { $keywordsToTry += $s.RegistryKeyword }
+      if ($s.AlternateKeywords) { $keywordsToTry += @($s.AlternateKeywords) }
+
+      $foundKey = $null
+      $actual = $null
+
+      foreach ($k in $keywordsToTry) {
         if ([string]::IsNullOrWhiteSpace($k)) { continue }
+        $kk = "$k".Trim()
+        if ([string]::IsNullOrWhiteSpace($kk)) { continue }
 
-        $propMap[$k] = [pscustomobject]@{
-          Value        = (Get-ScalarRegistryValue -Value $p.RegistryValue)
-          DisplayName  = $p.DisplayName
-          DisplayValue = $p.DisplayValue
+        if ($propMap.ContainsKey($kk)) {
+          $foundKey = $kk
+          $actual = $propMap[$kk].Value
+          break
         }
       }
-    } catch {
-      $allProps = @()
-    }
-  }
 
-  $ipv6Enabled = Get-NetBindingState -AdapterName $adapter.Name -ComponentId 'ms_tcpip6'
+      $status = 'Unknown'
 
-  $baselineReport = @()
-
-  foreach ($s in ($baselineSpec | Sort-Object Order)) {
-    # AppliesTo filtering (only Vendor for now)
-    $applies = $true
-    if ($s.AppliesTo -and $s.AppliesTo.ContainsKey('Vendor')) {
-      $wantVendor = "$($s.AppliesTo.Vendor)"
-      if (-not [string]::IsNullOrWhiteSpace($wantVendor)) {
-        $applies = ($vendor -eq $wantVendor)
+      # Desired value: human-readable labels (fallback to raw if no label)
+      $desiredParts = @()
+      foreach ($dv in @($s.DesiredValues)) {
+        $lbl = Get-ValueLabel -Spec $s -Value $dv
+        if ([string]::IsNullOrWhiteSpace($lbl)) { $desiredParts += "$dv" }
+        else { $desiredParts += $lbl }
       }
-    }
-    if (-not $applies) { continue }
+      $desiredText = ($desiredParts -join ' | ')
 
-    $keywordsToTry = @()
-    if (-not [string]::IsNullOrWhiteSpace($s.RegistryKeyword)) { $keywordsToTry += $s.RegistryKeyword }
-    if ($s.AlternateKeywords) { $keywordsToTry += @($s.AlternateKeywords) }
-
-    $foundKey = $null
-    $actual = $null
-
-    foreach ($k in $keywordsToTry) {
-      if ([string]::IsNullOrWhiteSpace($k)) { continue }
-      $kk = "$k".Trim()
-      if ([string]::IsNullOrWhiteSpace($kk)) { continue }
-
-      if ($propMap.ContainsKey($kk)) {
-        $foundKey = $kk
-        $actual = $propMap[$kk].Value
-        break
-      }
-    }
-
-    $status = 'Unknown'
-
-    # Desired value: human-readable labels (fallback to raw if no label)
-    $desiredParts = @()
-    foreach ($dv in @($s.DesiredValues)) {
-      $lbl = Get-ValueLabel -Spec $s -Value $dv
-      if ([string]::IsNullOrWhiteSpace($lbl)) { $desiredParts += "$dv" }
-      else { $desiredParts += $lbl }
-    }
-    $desiredText = ($desiredParts -join ' | ')
-
-    if ($null -ne $foundKey) {
-      if ($null -eq $actual) {
-        $status = 'Unknown'
-      } else {
-        $ok = $false
-        foreach ($dv in @($s.DesiredValues)) {
-          if ("$actual" -eq "$dv") { $ok = $true; break }
+      if ($null -ne $foundKey) {
+        if ($null -eq $actual) {
+          $status = 'Unknown'
+        } else {
+          $ok = $false
+          foreach ($dv in @($s.DesiredValues)) {
+            if ("$actual" -eq "$dv") { $ok = $true; break }
+          }
+          if ($ok) { $status = 'OK' } else { $status = 'Mismatch' }
         }
-        if ($ok) { $status = 'OK' } else { $status = 'Mismatch' }
+      }
+
+      # Actual value: human-readable label (fallback to raw if no label)
+      $actualLabel = Get-ValueLabel -Spec $s -Value $actual
+      $actualText = ''
+      if ($null -eq $actual) { $actualText = '' }
+      elseif ([string]::IsNullOrWhiteSpace($actualLabel)) { $actualText = "$actual" }
+      else { $actualText = $actualLabel }
+
+      $statusText = 'UNKNOWN'
+      if ($status -eq 'OK') { $statusText = 'OK' }
+      elseif ($status -eq 'Mismatch') { $statusText = 'NOT OK' }
+
+      $baselineReport += [pscustomobject]@{
+        Order   = $s.Order
+        Name    = $s.Name
+        Status  = $statusText
+        Value   = $actualText
+        Desired = $desiredText
+        Notes   = $s.Notes
+        Remedy  = $s.Remediation
       }
     }
 
-    # Actual value: human-readable label (fallback to raw if no label)
-    $actualLabel = Get-ValueLabel -Spec $s -Value $actual
-    $actualText = ''
-    if ($null -eq $actual) { $actualText = '' }
-    elseif ([string]::IsNullOrWhiteSpace($actualLabel)) { $actualText = "$actual" }
-    else { $actualText = $actualLabel }
-
-    $statusText = 'UNKNOWN'
-    if ($status -eq 'OK') { $statusText = 'OK' }
-    elseif ($status -eq 'Mismatch') { $statusText = 'NOT OK' }
-
-    $baselineReport += [pscustomobject]@{
-      Order   = $s.Order
-      Name    = $s.Name
-      Status  = $statusText
-      Value   = $actualText
-      Desired = $desiredText
-      Notes   = $s.Notes
-      Remedy  = $s.Remediation
+    $adapterReports += [pscustomobject]@{
+      Adapter = [pscustomobject]@{
+        Name                 = $adapter.Name
+        InterfaceDescription = $adapter.InterfaceDescription
+        Status               = $adapter.Status
+        LinkSpeed            = $adapter.LinkSpeed
+        MacAddress           = $adapter.MacAddress
+        ifIndex              = $adapter.ifIndex
+        PnPDeviceID          = $adapter.PnPDeviceID
+      }
+      Vendor             = $vendor
+      BaselineReport     = $baselineReport
+      IPv6Enabled        = $ipv6Enabled
+      AdvancedProperties = $allProps
     }
   }
 
@@ -304,19 +334,8 @@ function Get-NetworkStatus {
     ComputerName = $env:COMPUTERNAME
     Network      = [pscustomobject]@{
       Available = $true
-      Adapter   = [pscustomobject]@{
-        Name                 = $adapter.Name
-        InterfaceDescription = $adapter.InterfaceDescription
-        Status               = $adapter.Status
-        LinkSpeed            = $adapter.LinkSpeed
-        MacAddress           = $adapter.MacAddress
-        ifIndex              = $adapter.ifIndex
-      }
-      Vendor             = $vendor
       BaselineSpecLoaded = [bool]($baselineSpec -and $baselineSpec.Count -gt 0)
-      BaselineReport     = $baselineReport
-      IPv6Enabled        = $ipv6Enabled
-      AdvancedProperties = $allProps
+      Adapters  = $adapterReports
     }
   }
 }
@@ -336,21 +355,23 @@ function Show-NetworkStatus {
   }
 
   Write-Host "[IGP] Network status: $($o.ComputerName) @ $($o.Timestamp)"
-  Write-Host "Adapter: $($o.Network.Adapter.Name) | $($o.Network.Adapter.InterfaceDescription) | $($o.Network.Adapter.Status) | $($o.Network.Adapter.LinkSpeed)"
-  Write-Host "Vendor: $($o.Network.Vendor)"
   Write-Host "Baseline spec loaded: $($o.Network.BaselineSpecLoaded)"
-  Write-Host "IPv6 Enabled: $($o.Network.IPv6Enabled)"
   Write-Host ""
 
-  if ($o.Network.BaselineReport -and $o.Network.BaselineReport.Count -gt 0) {
-    $o.Network.BaselineReport |
-      Sort-Object Order |
-      Select-Object Name, Value, @{Name='Desired value';Expression={$_.Desired}}, Status |
-      Format-Table -AutoSize
+  foreach ($a in @($o.Network.Adapters)) {
+    Write-Host "Adapter: $($a.Adapter.Name) | $($a.Adapter.InterfaceDescription) | $($a.Adapter.Status) | $($a.Adapter.LinkSpeed)"
+    Write-Host "Vendor: $($a.Vendor)"
+    Write-Host "IPv6 Enabled: $($a.IPv6Enabled)"
 
-    Write-Host ""
-  } else {
-    Write-Host "No baseline report entries (spec missing or no applicable entries)." -ForegroundColor Yellow
+    if ($a.BaselineReport -and $a.BaselineReport.Count -gt 0) {
+      $a.BaselineReport |
+        Sort-Object Order |
+        Select-Object Name, Value, @{Name='Desired value';Expression={$_.Desired}}, Status |
+        Format-Table -AutoSize
+    } else {
+      Write-Host "No baseline report entries (spec missing or no applicable entries)." -ForegroundColor Yellow
+    }
+
     Write-Host ""
   }
 
