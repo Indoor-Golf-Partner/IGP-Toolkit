@@ -18,9 +18,22 @@
 
 Set-StrictMode -Version Latest
 
+
 function Test-CommandExists {
   param([Parameter(Mandatory)][string]$Name)
   return [bool](Get-Command -Name $Name -ErrorAction SilentlyContinue)
+}
+
+function Write-TraceLog {
+  param(
+    [Parameter(Mandatory)][bool]$Trace,
+    [Parameter(Mandatory)][string]$Message
+  )
+
+  if (-not $Trace) { return }
+
+  try { Write-Host "[NET-SETUP] $Message" } catch { }
+  try { Write-Verbose "[NET-SETUP] $Message" } catch { }
 }
 
 function Get-ScalarRegistryValue {
@@ -287,42 +300,50 @@ function Set-AdapterAllowPowerOff {
   [CmdletBinding(SupportsShouldProcess=$true)]
   param(
     [Parameter(Mandatory)][string]$AdapterName,
-    # Desired: $false (Disabled) or $true (Enabled)
-    [Parameter(Mandatory)][bool]$Enabled
+    [Parameter(Mandatory)][bool]$Enabled,
+    [switch]$Trace
   )
 
   if (-not (Test-CommandExists -Name 'Get-NetAdapterPowerManagement') -or -not (Test-CommandExists -Name 'Set-NetAdapterPowerManagement')) {
     throw 'Get/Set-NetAdapterPowerManagement are not available on this system.'
   }
 
-  $pm = $null
-  try {
-    $pm = Get-NetAdapterPowerManagement -Name $AdapterName -ErrorAction Stop | Select-Object -First 1
-  } catch {
-    $pm = $null
-  }
-
-  if ($null -eq $pm) {
-    throw 'Power management settings could not be queried for this adapter.'
-  }
+  $pm = Get-NetAdapterPowerManagement -Name $AdapterName -ErrorAction Stop | Select-Object -First 1
 
   if (-not ($pm.PSObject.Properties.Name -contains 'AllowComputerToTurnOffDevice')) {
     throw 'AllowComputerToTurnOffDevice property is not available for this adapter.'
   }
 
-  # Some drivers report "Unsupported" for this capability.
-  if ("$($pm.AllowComputerToTurnOffDevice)" -eq 'Unsupported') {
-    return 'Unsupported'
+  $before = "$($pm.AllowComputerToTurnOffDevice)"
+  Write-TraceLog -Trace:$Trace -Message ("PowerMgmt BEFORE='{0}'" -f $before)
+
+  if ($before -eq 'Unsupported') {
+    Write-TraceLog -Trace:$Trace -Message 'PowerMgmt is Unsupported by driver — skipping.'
+    return [pscustomobject]@{ Status='Unsupported'; Before=$before; Target=$null; After=$before }
   }
 
   $target = if ($Enabled) { 'Enabled' } else { 'Disabled' }
+  Write-TraceLog -Trace:$Trace -Message ("PowerMgmt TARGET='{0}'" -f $target)
 
   if ($PSCmdlet.ShouldProcess($AdapterName, "Set AllowComputerToTurnOffDevice=$target")) {
     $pm.AllowComputerToTurnOffDevice = $target
     $pm | Set-NetAdapterPowerManagement -ErrorAction Stop | Out-Null
+    Write-TraceLog -Trace:$Trace -Message 'PowerMgmt Set-NetAdapterPowerManagement completed.'
   }
 
-  return $target
+  $after = $null
+  try {
+    $pm2 = Get-NetAdapterPowerManagement -Name $AdapterName -ErrorAction Stop | Select-Object -First 1
+    if ($pm2 -and ($pm2.PSObject.Properties.Name -contains 'AllowComputerToTurnOffDevice')) {
+      $after = "$($pm2.AllowComputerToTurnOffDevice)"
+    }
+  } catch {
+    $after = $null
+  }
+
+  Write-TraceLog -Trace:$Trace -Message ("PowerMgmt AFTER='{0}'" -f $after)
+
+  return [pscustomobject]@{ Status='Applied'; Before=$before; Target=$target; After=$after }
 }
 
 function Set-AdapterIPv6Binding {
@@ -371,7 +392,10 @@ function Set-NetworkSettings {
     [string]$AdapterName,
 
     # Skip adapter restart after applying changes
-    [switch]$NoRestart
+    [switch]$NoRestart,
+
+    # Extra logging to help troubleshooting
+    [switch]$Trace
   )
 
   if (-not (Test-CommandExists -Name 'Get-NetAdapterAdvancedProperty')) {
@@ -392,6 +416,8 @@ function Set-NetworkSettings {
   if (-not $adapter) {
     throw 'No network adapter selected.'
   }
+
+  Write-TraceLog -Trace:$Trace -Message ("Selected adapter: Name='{0}' Desc='{1}' Status='{2}' LinkSpeed='{3}' PnP='{4}'" -f $adapter.Name, $adapter.InterfaceDescription, $adapter.Status, $adapter.LinkSpeed, $adapter.PnPDeviceID)
 
   $vendor = Get-AdapterVendor -Adapter $adapter
   $spec = @(Import-NetworkBaselineSpec)
@@ -482,6 +508,8 @@ function Set-NetworkSettings {
         $before = "$($pm.AllowComputerToTurnOffDevice)"
       }
 
+      Write-TraceLog -Trace:$Trace -Message ("PowerMgmt raw Before='{0}'" -f $before)
+
       if ($null -eq $before) {
         $skipped += 'Allow computer to turn off device'
         $results += [pscustomobject]@{ Name='Allow computer to turn off device'; Keyword=$null; Action='Skipped'; Reason='Power management state not available'; Before=$null; After=$null; Desired=@('Disabled') }
@@ -490,17 +518,22 @@ function Set-NetworkSettings {
         $results += [pscustomobject]@{ Name='Allow computer to turn off device'; Keyword=$null; Action='NoChange'; Reason='Already desired'; Before=$before; After=$before; Desired=@('Disabled') }
       } else {
         try {
-          Set-AdapterAllowPowerOff -AdapterName $adapter.Name -Enabled:$desiredAllowPowerOff
-          $after = $null
-          try {
-            $pm2 = Get-NetAdapterPowerManagement -Name $adapter.Name -ErrorAction Stop | Select-Object -First 1
-            if ($pm2 -and ($pm2.PSObject.Properties.Name -contains 'AllowComputerToTurnOffDevice')) {
-              $after = "$($pm2.AllowComputerToTurnOffDevice)"
-            }
-          } catch { $after = $null }
+          $pmResult = Set-AdapterAllowPowerOff -AdapterName $adapter.Name -Enabled:$desiredAllowPowerOff -Trace:$Trace
+          Write-TraceLog -Trace:$Trace -Message ("PowerMgmt RESULT: Status='{0}' Before='{1}' Target='{2}' After='{3}'" -f $pmResult.Status, $pmResult.Before, $pmResult.Target, $pmResult.After)
 
-          $changed += 'Allow computer to turn off device'
-          $results += [pscustomobject]@{ Name='Allow computer to turn off device'; Keyword=$null; Action='Changed'; Reason='Applied desired value'; Before=$before; After=$after; Desired=@('Disabled') }
+          if ($pmResult.Status -eq 'Unsupported') {
+            $skipped += 'Allow computer to turn off device'
+            $results += [pscustomobject]@{ Name='Allow computer to turn off device'; Keyword=$null; Action='Skipped'; Reason='Unsupported by driver'; Before=$before; After=$before; Desired=@('Disabled') }
+          } else {
+            $after = $pmResult.After
+            if ($after -and ($before -ne $after)) {
+              $changed += 'Allow computer to turn off device'
+              $results += [pscustomobject]@{ Name='Allow computer to turn off device'; Keyword=$null; Action='Changed'; Reason='Applied desired value'; Before=$before; After=$after; Desired=@('Disabled') }
+            } else {
+              $alreadyOk += 'Allow computer to turn off device'
+              $results += [pscustomobject]@{ Name='Allow computer to turn off device'; Keyword=$null; Action='NoChange'; Reason='No observable change after apply'; Before=$before; After=$after; Desired=@('Disabled') }
+            }
+          }
         } catch {
           $failed += 'Allow computer to turn off device'
           $results += [pscustomobject]@{ Name='Allow computer to turn off device'; Keyword=$null; Action='Failed'; Reason="$($_.Exception.Message)"; Before=$before; After=$before; Desired=@('Disabled') }
@@ -557,6 +590,7 @@ function Set-NetworkSettings {
     $results += [pscustomobject]@{ Name='IPv6 binding (ms_tcpip6)'; Keyword='ms_tcpip6'; Action='Skipped'; Reason='Get-NetAdapterBinding not available'; Before=$null; After=$null; Desired=@('Disabled') }
   }
 
+  Write-TraceLog -Trace:$Trace -Message ("Restart needed? NoRestart={0} ChangedCount={1}" -f [bool]$NoRestart, @($changed).Count)
   if (-not $NoRestart -and @($changed).Count -gt 0) {
     try {
       Restart-NetworkAdapter -AdapterName $adapter.Name
