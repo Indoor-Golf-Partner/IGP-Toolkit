@@ -190,9 +190,9 @@ function Get-NetworkStatus {
   [CmdletBinding()]
   param()
 
-  $adapters = Get-OnboardEthernetAdapters
+  $adapters = @(Get-OnboardEthernetAdapters)
 
-  if (-not $adapters -or $adapters.Count -eq 0) {
+  if ($null -eq $adapters -or @($adapters).Count -eq 0) {
     return [pscustomobject]@{
       Timestamp    = (Get-Date)
       ComputerName = $env:COMPUTERNAME
@@ -200,7 +200,7 @@ function Get-NetworkStatus {
     }
   }
 
-  $baselineSpec = Import-NetworkBaselineSpec
+  $baselineSpec = @(Import-NetworkBaselineSpec)
 
   $adapterReports = @()
 
@@ -334,7 +334,7 @@ function Get-NetworkStatus {
     ComputerName = $env:COMPUTERNAME
     Network      = [pscustomobject]@{
       Available = $true
-      BaselineSpecLoaded = [bool]($baselineSpec -and $baselineSpec.Count -gt 0)
+      BaselineSpecLoaded = [bool](@($baselineSpec).Count -gt 0)
       Adapters  = $adapterReports
     }
   }
