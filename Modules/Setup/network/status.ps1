@@ -332,8 +332,13 @@ function Get-NetworkStatus {
     $pmStatus = 'UNKNOWN'
     $pmValue  = ''
     if ($null -ne $allowPowerOff) {
-      $pmValue  = (if ($allowPowerOff) { 'Enabled' } else { 'Disabled' })
-      $pmStatus = (if ($allowPowerOff) { 'NOT OK' } else { 'OK' })
+        if ($allowPowerOff) {
+            $pmValue  = 'Enabled'
+            $pmStatus = 'NOT OK'
+        } else {
+            $pmValue  = 'Disabled'
+            $pmStatus = 'OK'
+        }
     }
 
     $baselineReport += [pscustomobject]@{
@@ -350,8 +355,13 @@ function Get-NetworkStatus {
     $ipv6Status = 'UNKNOWN'
     $ipv6Value  = ''
     if ($null -ne $ipv6Enabled) {
-      $ipv6Value  = (if ($ipv6Enabled) { 'Enabled' } else { 'Disabled' })
-      $ipv6Status = (if ($ipv6Enabled) { 'NOT OK' } else { 'OK' })
+        if ($ipv6Enabled) {
+            $ipv6Value  = 'Enabled'
+            $ipv6Status = 'NOT OK'
+        } else {
+            $ipv6Value  = 'Disabled'
+            $ipv6Status = 'OK'
+        }
     }
 
     $baselineReport += [pscustomobject]@{
