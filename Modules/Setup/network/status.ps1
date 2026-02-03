@@ -181,11 +181,76 @@ function Get-NetBindingState {
   }
 }
 
+function Get-PnpLocationInformation {
+  param(
+    [AllowNull()][string]$PnPDeviceID
+  )
+
+  if ([string]::IsNullOrWhiteSpace($PnPDeviceID)) {
+    return [pscustomobject]@{ LocationInformation = $null; Guess = 'Unknown' }
+  }
+
+  try {
+    $escaped = $PnPDeviceID.Replace('\\', '\\\\').Replace('"', '\\"')
+    $p = Get-CimInstance -ClassName Win32_PnPEntity -Filter "PNPDeviceID=\"$escaped\"" -ErrorAction Stop |
+      Select-Object -First 1
+
+    $loc = $null
+    if ($p -and ($p.PSObject.Properties.Name -contains 'LocationInformation')) {
+      $loc = $p.LocationInformation
+    }
+
+    # Best-effort guess:
+    # - If Windows reports a slot explicitly, it's very likely an add-in card.
+    # - If it reports 'Onboard'/'Embedded', likely motherboard.
+    # - Otherwise unknown.
+    $guess = 'Unknown'
+    $locs = "$loc"
+    if (-not [string]::IsNullOrWhiteSpace($locs)) {
+      if ($locs -match '(?i)slot') { $guess = 'Add-in (PCIe slot)'
+      } elseif ($locs -match '(?i)onboard|embedded') { $guess = 'Onboard'
+      }
+    }
+
+    return [pscustomobject]@{ LocationInformation = $loc; Guess = $guess }
+  } catch {
+    return [pscustomobject]@{ LocationInformation = $null; Guess = 'Unknown' }
+  }
+}
+
 function Get-NetworkStatus {
   [CmdletBinding()]
   param()
 
-  $adapters = @(Get-OnboardEthernetAdapters)
+  $adaptersRaw = @(Get-OnboardEthernetAdapters)
+
+  # Enrich adapters with vendor + best-effort onboard/add-in guess, then sort.
+  $adapters = @(
+    foreach ($a in $adaptersRaw) {
+      $v = Get-AdapterVendor -Adapter $a
+      $pi = Get-PnpLocationInformation -PnPDeviceID $a.PnPDeviceID
+      $isOnboard = ($pi.Guess -eq 'Onboard')
+      $isRealtek = ($v -eq 'Realtek')
+
+      # Order:
+      # 0 = Onboard & Realtek
+      # 1 = Onboard
+      # 2 = Realtek
+      # 3 = Other
+      $order = 3
+      if ($isOnboard -and $isRealtek) { $order = 0 }
+      elseif ($isOnboard) { $order = 1 }
+      elseif ($isRealtek) { $order = 2 }
+
+      [pscustomobject]@{
+        Adapter = $a
+        Vendor  = $v
+        PnpInfo = $pi
+        Order   = $order
+        IfIndex = $a.ifIndex
+      }
+    }
+  ) | Sort-Object -Property Order, IfIndex
 
   if ($null -eq $adapters -or @($adapters).Count -eq 0) {
     return [pscustomobject]@{
@@ -199,8 +264,10 @@ function Get-NetworkStatus {
 
   $adapterReports = @()
 
-  foreach ($adapter in $adapters) {
-    $vendor = Get-AdapterVendor -Adapter $adapter
+  foreach ($entry in $adapters) {
+    $adapter = $entry.Adapter
+    $vendor  = $entry.Vendor
+    $pnpInfo = $entry.PnpInfo
 
     # Build a map: keyword -> { Value, DisplayName, DisplayValue }
     $propMap = @{}
@@ -316,6 +383,8 @@ function Get-NetworkStatus {
         MacAddress           = $adapter.MacAddress
         ifIndex              = $adapter.ifIndex
         PnPDeviceID          = $adapter.PnPDeviceID
+        LocationInformation = $pnpInfo.LocationInformation
+        FormFactorGuess     = $pnpInfo.Guess
       }
       Vendor             = $vendor
       BaselineReport     = $baselineReport
@@ -354,11 +423,17 @@ function Show-NetworkStatus {
   Write-Host ""
 
   foreach ($a in @($o.Network.Adapters)) {
-    Write-Host "Adapter: $($a.Adapter.Name) | $($a.Adapter.InterfaceDescription) | $($a.Adapter.Status) | $($a.Adapter.LinkSpeed)"
+    $desc = "$($a.Adapter.InterfaceDescription)"
+    if ($a.Vendor -eq 'Realtek') { $desc = "$desc (Trackman?)" }
+    Write-Host "Adapter: $($a.Adapter.Name) | $desc | $($a.Adapter.Status) | $($a.Adapter.LinkSpeed)"
     Write-Host "Vendor: $($a.Vendor)"
     Write-Host "IPv6 Enabled: $($a.IPv6Enabled)"
+    if (-not [string]::IsNullOrWhiteSpace("$($a.Adapter.LocationInformation)")) {
+      Write-Host "Location: $($a.Adapter.LocationInformation)"
+    }
+    Write-Host "Form factor: $($a.Adapter.FormFactorGuess)"
 
-    if ($a.BaselineReport -and $a.BaselineReport.Count -gt 0) {
+    if ($a.BaselineReport -and @($a.BaselineReport).Count -gt 0) {
       $a.BaselineReport |
         Sort-Object Order |
         Select-Object Name, Value, @{Name='Desired value';Expression={$_.Desired}}, Status |
