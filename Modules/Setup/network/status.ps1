@@ -108,8 +108,9 @@ function Get-OnboardEthernetAdapters {
   if (-not (Test-CommandExists -Name 'Get-NetAdapter')) { return @() }
 
   try {
-    $all = Get-NetAdapter -Physical -ErrorAction Stop | Where-Object {
-      $_.HardwareInterface -eq $true -and $_.Status -ne 'Disabled'
+    # Do NOT use -Physical here; some real PCIe/onboard NICs are not returned by -Physical on some systems/drivers.
+    $all = Get-NetAdapter -ErrorAction Stop | Where-Object {
+      $_.HardwareInterface -eq $true -and $_.Status -ne 'Not Present'
     }
   } catch {
     return @()
@@ -134,13 +135,7 @@ function Get-OnboardEthernetAdapters {
     ($pnp -notmatch '^(?i)usb')
   }
 
-  # Prefer 802.3 (Ethernet) when MediaType exists and is populated
-  $ether = $filtered | Where-Object {
-    $mt = "$($_.MediaType)"
-    if ([string]::IsNullOrWhiteSpace($mt)) { $true } else { $mt -eq '802.3' }
-  }
-
-  return @($ether | Sort-Object -Property ifIndex)
+  return @($filtered | Sort-Object -Property ifIndex)
 }
 
 function Get-NicAdvancedPropertyValue {
