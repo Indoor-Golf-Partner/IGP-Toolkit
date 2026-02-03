@@ -188,12 +188,15 @@ function Select-NetworkAdapterFromMenu {
     $a = $ordered[$i].Adapter
     $vendor = $ordered[$i].Vendor
     $label = Format-AdapterLabel -Adapter $a -Vendor $vendor
-    Write-Host ("[{0}] {1}" -f ($i + 1), $label)
+    Write-Host ("{0}) {1}" -f ($i + 1), $label)
   }
 
   Write-Host ''
-  $choice = Read-Host 'Enter number (or press Enter to cancel)'
+  Write-Host 'Q) Back'
+  Write-Host ''
+  $choice = Read-Host 'Enter number (or Q to go back)'
   if ([string]::IsNullOrWhiteSpace($choice)) { return $null }
+  if ($choice.Trim().ToLowerInvariant() -eq 'q') { return $null }
 
   $n = $null
   if (-not [int]::TryParse($choice, [ref]$n)) { return $null }
@@ -284,16 +287,42 @@ function Set-AdapterAllowPowerOff {
   [CmdletBinding(SupportsShouldProcess=$true)]
   param(
     [Parameter(Mandatory)][string]$AdapterName,
+    # Desired: $false (Disabled) or $true (Enabled)
     [Parameter(Mandatory)][bool]$Enabled
   )
 
-  if (-not (Test-CommandExists -Name 'Set-NetAdapterPowerManagement')) {
-    throw 'Set-NetAdapterPowerManagement is not available on this system.'
+  if (-not (Test-CommandExists -Name 'Get-NetAdapterPowerManagement') -or -not (Test-CommandExists -Name 'Set-NetAdapterPowerManagement')) {
+    throw 'Get/Set-NetAdapterPowerManagement are not available on this system.'
   }
 
-  if ($PSCmdlet.ShouldProcess($AdapterName, "Set AllowComputerToTurnOffDevice=$Enabled")) {
-    Set-NetAdapterPowerManagement -Name $AdapterName -AllowComputerToTurnOffDevice:$Enabled -ErrorAction Stop | Out-Null
+  $pm = $null
+  try {
+    $pm = Get-NetAdapterPowerManagement -Name $AdapterName -ErrorAction Stop | Select-Object -First 1
+  } catch {
+    $pm = $null
   }
+
+  if ($null -eq $pm) {
+    throw 'Power management settings could not be queried for this adapter.'
+  }
+
+  if (-not ($pm.PSObject.Properties.Name -contains 'AllowComputerToTurnOffDevice')) {
+    throw 'AllowComputerToTurnOffDevice property is not available for this adapter.'
+  }
+
+  # Some drivers report "Unsupported" for this capability.
+  if ("$($pm.AllowComputerToTurnOffDevice)" -eq 'Unsupported') {
+    return 'Unsupported'
+  }
+
+  $target = if ($Enabled) { 'Enabled' } else { 'Disabled' }
+
+  if ($PSCmdlet.ShouldProcess($AdapterName, "Set AllowComputerToTurnOffDevice=$target")) {
+    $pm.AllowComputerToTurnOffDevice = $target
+    $pm | Set-NetAdapterPowerManagement -ErrorAction Stop | Out-Null
+  }
+
+  return $target
 }
 
 function Set-AdapterIPv6Binding {
@@ -449,13 +478,14 @@ function Set-NetworkSettings {
       $pm = Get-NetAdapterPowerManagement -Name $adapter.Name -ErrorAction Stop | Select-Object -First 1
       $before = $null
       if ($pm -and ($pm.PSObject.Properties.Name -contains 'AllowComputerToTurnOffDevice')) {
-        $before = [bool]$pm.AllowComputerToTurnOffDevice
+        # Can be 'Enabled'/'Disabled' or boolean depending on driver
+        $before = "$($pm.AllowComputerToTurnOffDevice)"
       }
 
       if ($null -eq $before) {
         $skipped += 'Allow computer to turn off device'
         $results += [pscustomobject]@{ Name='Allow computer to turn off device'; Keyword=$null; Action='Skipped'; Reason='Power management state not available'; Before=$null; After=$null; Desired=@('Disabled') }
-      } elseif ($before -eq $desiredAllowPowerOff) {
+      } elseif ($before -eq 'Disabled') {
         $alreadyOk += 'Allow computer to turn off device'
         $results += [pscustomobject]@{ Name='Allow computer to turn off device'; Keyword=$null; Action='NoChange'; Reason='Already desired'; Before=$before; After=$before; Desired=@('Disabled') }
       } else {
@@ -465,7 +495,7 @@ function Set-NetworkSettings {
           try {
             $pm2 = Get-NetAdapterPowerManagement -Name $adapter.Name -ErrorAction Stop | Select-Object -First 1
             if ($pm2 -and ($pm2.PSObject.Properties.Name -contains 'AllowComputerToTurnOffDevice')) {
-              $after = [bool]$pm2.AllowComputerToTurnOffDevice
+              $after = "$($pm2.AllowComputerToTurnOffDevice)"
             }
           } catch { $after = $null }
 
