@@ -1,5 +1,3 @@
-
-
 <#
 .SYNOPSIS
   Applies IGP baseline network adapter settings.
@@ -83,7 +81,7 @@ function Get-PrimaryEthernetAdapter {
     return $null
   }
 
-  if (-not $all -or $all.Count -eq 0) { return $null }
+  if ($null -eq $all -or @($all).Count -eq 0) { return $null }
 
   $exact = $all | Where-Object { $_.Name -eq 'Ethernet' } | Select-Object -First 1
   if ($exact) { return $exact }
@@ -94,80 +92,104 @@ function Get-PrimaryEthernetAdapter {
   return ($all | Sort-Object -Property ifIndex | Select-Object -First 1)
 }
 
-function Build-AdvancedPropMap {
-  param([Parameter(Mandatory)][string]$AdapterName)
+function Get-EligibleEthernetAdapters {
+  <#
+    Returns likely onboard/PCIe Ethernet adapters for configuration.
 
-  $map = @{}
+    Excludes:
+      - Wi-Fi / WLAN / 802.11
+      - Bluetooth
+      - USB NICs
+      - Virtual adapters
 
-  if (-not (Test-CommandExists -Name 'Get-NetAdapterAdvancedProperty')) { return $map }
+    Notes:
+      - We do not use -Physical because some real NICs are not returned by -Physical on some systems.
+  #>
+
+  if (-not (Test-CommandExists -Name 'Get-NetAdapter')) { return @() }
 
   try {
-    $allProps = Get-NetAdapterAdvancedProperty -Name $AdapterName -ErrorAction Stop |
-      Select-Object DisplayName, DisplayValue, RegistryKeyword, RegistryValue
-
-    foreach ($p in $allProps) {
-      $k = "$($p.RegistryKeyword)".Trim()
-      if ([string]::IsNullOrWhiteSpace($k)) { continue }
-
-      $map[$k] = [pscustomobject]@{
-        Value        = (Get-ScalarRegistryValue -Value $p.RegistryValue)
-        DisplayName  = $p.DisplayName
-        DisplayValue = $p.DisplayValue
-      }
+    $all = Get-NetAdapter -ErrorAction Stop | Where-Object {
+      $_.HardwareInterface -eq $true -and $_.Status -ne 'Not Present'
     }
   } catch {
-    # return empty
+    return @()
   }
 
-  return $map
+  $filtered = @($all | Where-Object {
+    $desc = "$($_.InterfaceDescription)"
+    $name = "$($_.Name)"
+    $pnp  = "$($_.PnPDeviceID)"
+
+    # Exclude obvious wireless/bluetooth
+    ($desc -notmatch '(?i)wi-?fi|wireless|wlan|802\.11|bluetooth') -and
+    ($name -notmatch '(?i)wi-?fi|wireless|wlan|bluetooth') -and
+
+    # Exclude virtual
+    ($desc -notmatch '(?i)virtual|hyper-?v|vmware|vbox|tap|tunneling|loopback') -and
+    ($name -notmatch '(?i)vEthernet|virtual|hyper-?v|vmware|vbox|tap') -and
+
+    # Exclude USB NICs
+    ($pnp  -notmatch '^(?i)usb')
+  })
+
+  return @($filtered | Sort-Object -Property ifIndex)
 }
 
-function Convert-ToRegistryValueType {
-  param([AllowNull()]$Value)
-
-  if ($null -eq $Value) { return $null }
-
-  # Desired values are commonly numeric; pass int when possible.
-  if ($Value -is [int] -or $Value -is [long]) { return [int]$Value }
-
-  $s = "$Value"
-  $i = $null
-  if ([int]::TryParse($s, [ref]$i)) { return $i }
-
-  return $s
-}
-
-function Set-AdvancedPropertyByKeyword {
-  [CmdletBinding(SupportsShouldProcess=$true)]
+function Format-AdapterLabel {
   param(
-    [Parameter(Mandatory)][string]$AdapterName,
-    [Parameter(Mandatory)][string]$RegistryKeyword,
-    [Parameter(Mandatory)]$RegistryValue
+    [Parameter(Mandatory)]$Adapter,
+    [Parameter(Mandatory)][string]$Vendor
   )
 
-  if (-not (Test-CommandExists -Name 'Set-NetAdapterAdvancedProperty')) {
-    throw 'Set-NetAdapterAdvancedProperty is not available on this system.'
-  }
+  $desc = "$($Adapter.InterfaceDescription)"
+  if ($Vendor -eq 'Realtek') { $desc = "$desc (Trackman?)" }
 
-  $rv = Convert-ToRegistryValueType -Value $RegistryValue
-
-  if ($PSCmdlet.ShouldProcess("$AdapterName / $RegistryKeyword", "Set RegistryValue=$rv")) {
-    Set-NetAdapterAdvancedProperty -Name $AdapterName -RegistryKeyword $RegistryKeyword -RegistryValue $rv -NoRestart -ErrorAction Stop | Out-Null
-  }
+  return "{0} | {1} | {2} | {3}" -f $Adapter.Name, $desc, $Adapter.Status, $Adapter.LinkSpeed
 }
 
-function Restart-NetworkAdapter {
-  [CmdletBinding(SupportsShouldProcess=$true)]
-  param([Parameter(Mandatory)][string]$AdapterName)
+function Select-NetworkAdapterFromMenu {
+  <#
+    Interactive adapter picker. Returns the selected NetAdapter object or $null if cancelled.
+  #>
 
-  if (-not (Test-CommandExists -Name 'Disable-NetAdapter') -or -not (Test-CommandExists -Name 'Enable-NetAdapter')) {
-    throw 'Disable-NetAdapter/Enable-NetAdapter are not available on this system.'
+  $adapters = @(Get-EligibleEthernetAdapters)
+
+  if ($null -eq $adapters -or @($adapters).Count -eq 0) {
+    Write-Host "No eligible Ethernet adapters found." -ForegroundColor Yellow
+    return $null
   }
 
-  if ($PSCmdlet.ShouldProcess($AdapterName, 'Restart network adapter (disable/enable)')) {
-    Disable-NetAdapter -Name $AdapterName -Confirm:$false -ErrorAction Stop | Out-Null
-    Start-Sleep -Seconds 2
-    Enable-NetAdapter -Name $AdapterName -Confirm:$false -ErrorAction Stop | Out-Null
+  Write-Host "Select network adapter to apply IGP baseline settings:" -ForegroundColor Cyan
+  Write-Host ""
+
+  for ($i = 0; $i -lt @($adapters).Count; $i++) {
+    $a = $adapters[$i]
+    $v = Get-AdapterVendor -Adapter $a
+    $label = Format-AdapterLabel -Adapter $a -Vendor $v
+    Write-Host ("[{0}] {1}" -f ($i + 1), $label)
+  }
+
+  Write-Host ""
+  Write-Host "[Q] Cancel" -ForegroundColor DarkGray
+
+  while ($true) {
+    $choice = Read-Host "Enter selection"
+
+    if ([string]::IsNullOrWhiteSpace($choice)) { continue }
+
+    if ($choice -match '^(?i)q$') {
+      return $null
+    }
+
+    $n = $null
+    if ([int]::TryParse($choice, [ref]$n)) {
+      if ($n -ge 1 -and $n -le @($adapters).Count) {
+        return $adapters[$n - 1]
+      }
+    }
+
+    Write-Host "Invalid selection. Try again." -ForegroundColor Yellow
   }
 }
 
@@ -186,15 +208,23 @@ function Set-NetworkSettings {
   }
 
   $adapter = $null
+
   if ($AdapterName) {
     try { $adapter = Get-NetAdapter -Name $AdapterName -ErrorAction Stop } catch { $adapter = $null }
   }
-  if (-not $adapter) { $adapter = Get-PrimaryEthernetAdapter }
-  if (-not $adapter) { throw 'No suitable physical network adapter found.' }
+
+  if (-not $adapter) {
+    # Interactive selection when no adapter name is provided
+    $adapter = Select-NetworkAdapterFromMenu
+  }
+
+  if (-not $adapter) {
+    throw 'No network adapter selected.'
+  }
 
   $vendor = Get-AdapterVendor -Adapter $adapter
-  $spec = Import-NetworkBaselineSpec
-  if (-not $spec -or $spec.Count -eq 0) { throw 'Network baseline spec could not be loaded (values.ps1 missing or invalid).' }
+  $spec = @(Import-NetworkBaselineSpec)
+  if ($null -eq $spec -or @($spec).Count -eq 0) { throw 'Network baseline spec could not be loaded (values.ps1 missing or invalid).' }
 
   $propMap = Build-AdvancedPropMap -AdapterName $adapter.Name
 
@@ -268,7 +298,7 @@ function Set-NetworkSettings {
     }
   }
 
-  if (-not $NoRestart -and $changed.Count -gt 0) {
+  if (-not $NoRestart -and @($changed).Count -gt 0) {
     try {
       Restart-NetworkAdapter -AdapterName $adapter.Name
     } catch {
@@ -293,5 +323,15 @@ function Set-NetworkSettings {
       Skipped   = $skipped
     }
     Results      = $results
+  }
+}
+
+# If executed directly (not dot-sourced), prompt for adapter and apply settings.
+if ($MyInvocation.InvocationName -ne '.') {
+  try {
+    Set-NetworkSettings
+  } catch {
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    Read-Host 'Press Enter to exit'
   }
 }
