@@ -148,48 +148,136 @@ function Format-AdapterLabel {
   return "{0} | {1} | {2} | {3}" -f $Adapter.Name, $desc, $Adapter.Status, $Adapter.LinkSpeed
 }
 
-function Select-NetworkAdapterFromMenu {
-  <#
-    Interactive adapter picker. Returns the selected NetAdapter object or $null if cancelled.
-  #>
 
-  $adapters = @(Get-EligibleEthernetAdapters)
+function Build-AdvancedPropMap {
+  param([Parameter(Mandatory)][string]$AdapterName)
 
-  if ($null -eq $adapters -or @($adapters).Count -eq 0) {
-    Write-Host "No eligible Ethernet adapters found." -ForegroundColor Yellow
-    return $null
-  }
+  $map = @{}
 
-  Write-Host "Select network adapter to apply IGP baseline settings:" -ForegroundColor Cyan
-  Write-Host ""
+  if (-not (Test-CommandExists -Name 'Get-NetAdapterAdvancedProperty')) { return $map }
 
-  for ($i = 0; $i -lt @($adapters).Count; $i++) {
-    $a = $adapters[$i]
-    $v = Get-AdapterVendor -Adapter $a
-    $label = Format-AdapterLabel -Adapter $a -Vendor $v
-    Write-Host ("[{0}] {1}" -f ($i + 1), $label)
-  }
+  try {
+    $allProps = Get-NetAdapterAdvancedProperty -Name $AdapterName -ErrorAction Stop |
+      Select-Object DisplayName, DisplayValue, RegistryKeyword, RegistryValue
 
-  Write-Host ""
-  Write-Host "[Q] Cancel" -ForegroundColor DarkGray
+    foreach ($p in $allProps) {
+      $k = "$($p.RegistryKeyword)".Trim()
+      if ([string]::IsNullOrWhiteSpace($k)) { continue }
 
-  while ($true) {
-    $choice = Read-Host "Enter selection"
-
-    if ([string]::IsNullOrWhiteSpace($choice)) { continue }
-
-    if ($choice -match '^(?i)q$') {
-      return $null
-    }
-
-    $n = $null
-    if ([int]::TryParse($choice, [ref]$n)) {
-      if ($n -ge 1 -and $n -le @($adapters).Count) {
-        return $adapters[$n - 1]
+      $map[$k] = [pscustomobject]@{
+        Value        = (Get-ScalarRegistryValue -Value $p.RegistryValue)
+        DisplayName  = $p.DisplayName
+        DisplayValue = $p.DisplayValue
       }
     }
+  } catch {
+    # return empty
+  }
 
-    Write-Host "Invalid selection. Try again." -ForegroundColor Yellow
+  return $map
+}
+
+function Convert-ToRegistryValueType {
+  param([AllowNull()]$Value)
+
+  if ($null -eq $Value) { return $null }
+
+  # Desired values are commonly numeric; pass int when possible.
+  if ($Value -is [int] -or $Value -is [long]) { return [int]$Value }
+
+  $s = "$Value"
+  $i = $null
+  if ([int]::TryParse($s, [ref]$i)) { return $i }
+
+  return $s
+}
+
+function Set-AdvancedPropertyByKeyword {
+  [CmdletBinding(SupportsShouldProcess=$true)]
+  param(
+    [Parameter(Mandatory)][string]$AdapterName,
+    [Parameter(Mandatory)][string]$RegistryKeyword,
+    [Parameter(Mandatory)]$RegistryValue
+  )
+
+  if (-not (Test-CommandExists -Name 'Set-NetAdapterAdvancedProperty')) {
+    throw 'Set-NetAdapterAdvancedProperty is not available on this system.'
+  }
+
+  $rv = Convert-ToRegistryValueType -Value $RegistryValue
+
+  if ($PSCmdlet.ShouldProcess("$AdapterName / $RegistryKeyword", "Set RegistryValue=$rv")) {
+    Set-NetAdapterAdvancedProperty -Name $AdapterName -RegistryKeyword $RegistryKeyword -RegistryValue $rv -NoRestart -ErrorAction Stop | Out-Null
+  }
+}
+
+function Restart-NetworkAdapter {
+  [CmdletBinding(SupportsShouldProcess=$true)]
+  param([Parameter(Mandatory)][string]$AdapterName)
+
+  if (-not (Test-CommandExists -Name 'Disable-NetAdapter') -or -not (Test-CommandExists -Name 'Enable-NetAdapter')) {
+    throw 'Disable-NetAdapter/Enable-NetAdapter are not available on this system.'
+  }
+
+  if ($PSCmdlet.ShouldProcess($AdapterName, 'Restart network adapter (disable/enable)')) {
+    Disable-NetAdapter -Name $AdapterName -Confirm:$false -ErrorAction Stop | Out-Null
+    Start-Sleep -Seconds 2
+    Enable-NetAdapter -Name $AdapterName -Confirm:$false -ErrorAction Stop | Out-Null
+  }
+}
+
+function Set-AdapterAllowPowerOff {
+  [CmdletBinding(SupportsShouldProcess=$true)]
+  param(
+    [Parameter(Mandatory)][string]$AdapterName,
+    [Parameter(Mandatory)][bool]$Enabled
+  )
+
+  if (-not (Test-CommandExists -Name 'Set-NetAdapterPowerManagement')) {
+    throw 'Set-NetAdapterPowerManagement is not available on this system.'
+  }
+
+  if ($PSCmdlet.ShouldProcess($AdapterName, "Set AllowComputerToTurnOffDevice=$Enabled")) {
+    Set-NetAdapterPowerManagement -Name $AdapterName -AllowComputerToTurnOffDevice:$Enabled -ErrorAction Stop | Out-Null
+  }
+}
+
+function Set-AdapterIPv6Binding {
+  [CmdletBinding(SupportsShouldProcess=$true)]
+  param(
+    [Parameter(Mandatory)][string]$AdapterName,
+    [Parameter(Mandatory)][bool]$Enabled
+  )
+
+  if (-not (Test-CommandExists -Name 'Get-NetAdapterBinding')) {
+    throw 'Get-NetAdapterBinding is not available on this system.'
+  }
+
+  $b = $null
+  try {
+    $b = Get-NetAdapterBinding -Name $AdapterName -ComponentID 'ms_tcpip6' -ErrorAction Stop | Select-Object -First 1
+  } catch {
+    $b = $null
+  }
+
+  if ($null -eq $b) {
+    throw 'IPv6 binding (ms_tcpip6) could not be queried for this adapter.'
+  }
+
+  if ($Enabled) {
+    if (-not (Test-CommandExists -Name 'Enable-NetAdapterBinding')) {
+      throw 'Enable-NetAdapterBinding is not available on this system.'
+    }
+    if ($PSCmdlet.ShouldProcess($AdapterName, 'Enable IPv6 binding (ms_tcpip6)')) {
+      Enable-NetAdapterBinding -Name $AdapterName -ComponentID 'ms_tcpip6' -ErrorAction Stop | Out-Null
+    }
+  } else {
+    if (-not (Test-CommandExists -Name 'Disable-NetAdapterBinding')) {
+      throw 'Disable-NetAdapterBinding is not available on this system.'
+    }
+    if ($PSCmdlet.ShouldProcess($AdapterName, 'Disable IPv6 binding (ms_tcpip6)')) {
+      Disable-NetAdapterBinding -Name $AdapterName -ComponentID 'ms_tcpip6' -ErrorAction Stop | Out-Null
+    }
   }
 }
 
@@ -227,6 +315,9 @@ function Set-NetworkSettings {
   if ($null -eq $spec -or @($spec).Count -eq 0) { throw 'Network baseline spec could not be loaded (values.ps1 missing or invalid).' }
 
   $propMap = Build-AdvancedPropMap -AdapterName $adapter.Name
+  # Desired non-advanced settings
+  $desiredAllowPowerOff = $false   # Device Manager > Power Management checkbox should be OFF
+  $desiredIPv6Enabled   = $false   # IPv6 binding (ms_tcpip6) should be disabled
 
   $results = @()
   $changed = @()
@@ -296,6 +387,90 @@ function Set-NetworkSettings {
       $failed += $s.Name
       $results += [pscustomobject]@{ Name=$s.Name; Keyword=$foundKey; Action='Failed'; Reason="$($_.Exception.Message)"; Before=$before; After=$before; Desired=@($s.DesiredValues) }
     }
+  }
+
+  # --- Power Management: Allow the computer to turn off this device to save power ---
+  if (Test-CommandExists -Name 'Get-NetAdapterPowerManagement') {
+    try {
+      $pm = Get-NetAdapterPowerManagement -Name $adapter.Name -ErrorAction Stop | Select-Object -First 1
+      $before = $null
+      if ($pm -and ($pm.PSObject.Properties.Name -contains 'AllowComputerToTurnOffDevice')) {
+        $before = [bool]$pm.AllowComputerToTurnOffDevice
+      }
+
+      if ($null -eq $before) {
+        $skipped += 'Allow computer to turn off device'
+        $results += [pscustomobject]@{ Name='Allow computer to turn off device'; Keyword=$null; Action='Skipped'; Reason='Power management state not available'; Before=$null; After=$null; Desired=@('Disabled') }
+      } elseif ($before -eq $desiredAllowPowerOff) {
+        $alreadyOk += 'Allow computer to turn off device'
+        $results += [pscustomobject]@{ Name='Allow computer to turn off device'; Keyword=$null; Action='NoChange'; Reason='Already desired'; Before=$before; After=$before; Desired=@('Disabled') }
+      } else {
+        try {
+          Set-AdapterAllowPowerOff -AdapterName $adapter.Name -Enabled:$desiredAllowPowerOff
+          $after = $null
+          try {
+            $pm2 = Get-NetAdapterPowerManagement -Name $adapter.Name -ErrorAction Stop | Select-Object -First 1
+            if ($pm2 -and ($pm2.PSObject.Properties.Name -contains 'AllowComputerToTurnOffDevice')) {
+              $after = [bool]$pm2.AllowComputerToTurnOffDevice
+            }
+          } catch { $after = $null }
+
+          $changed += 'Allow computer to turn off device'
+          $results += [pscustomobject]@{ Name='Allow computer to turn off device'; Keyword=$null; Action='Changed'; Reason='Applied desired value'; Before=$before; After=$after; Desired=@('Disabled') }
+        } catch {
+          $failed += 'Allow computer to turn off device'
+          $results += [pscustomobject]@{ Name='Allow computer to turn off device'; Keyword=$null; Action='Failed'; Reason="$($_.Exception.Message)"; Before=$before; After=$before; Desired=@('Disabled') }
+        }
+      }
+    } catch {
+      $failed += 'Allow computer to turn off device'
+      $results += [pscustomobject]@{ Name='Allow computer to turn off device'; Keyword=$null; Action='Failed'; Reason="$($_.Exception.Message)"; Before=$null; After=$null; Desired=@('Disabled') }
+    }
+  } else {
+    $skipped += 'Allow computer to turn off device'
+    $results += [pscustomobject]@{ Name='Allow computer to turn off device'; Keyword=$null; Action='Skipped'; Reason='Get-NetAdapterPowerManagement not available'; Before=$null; After=$null; Desired=@('Disabled') }
+  }
+
+  # --- IPv6 binding (ms_tcpip6) ---
+  if (Test-CommandExists -Name 'Get-NetAdapterBinding') {
+    try {
+      $b = Get-NetAdapterBinding -Name $adapter.Name -ComponentID 'ms_tcpip6' -ErrorAction Stop | Select-Object -First 1
+      $before = $null
+      if ($b -and ($b.PSObject.Properties.Name -contains 'Enabled')) {
+        $before = [bool]$b.Enabled
+      }
+
+      if ($null -eq $before) {
+        $skipped += 'IPv6 binding (ms_tcpip6)'
+        $results += [pscustomobject]@{ Name='IPv6 binding (ms_tcpip6)'; Keyword='ms_tcpip6'; Action='Skipped'; Reason='Binding state not available'; Before=$null; After=$null; Desired=@('Disabled') }
+      } elseif ($before -eq $desiredIPv6Enabled) {
+        $alreadyOk += 'IPv6 binding (ms_tcpip6)'
+        $results += [pscustomobject]@{ Name='IPv6 binding (ms_tcpip6)'; Keyword='ms_tcpip6'; Action='NoChange'; Reason='Already desired'; Before=$before; After=$before; Desired=@('Disabled') }
+      } else {
+        try {
+          Set-AdapterIPv6Binding -AdapterName $adapter.Name -Enabled:$desiredIPv6Enabled
+          $after = $null
+          try {
+            $b2 = Get-NetAdapterBinding -Name $adapter.Name -ComponentID 'ms_tcpip6' -ErrorAction Stop | Select-Object -First 1
+            if ($b2 -and ($b2.PSObject.Properties.Name -contains 'Enabled')) {
+              $after = [bool]$b2.Enabled
+            }
+          } catch { $after = $null }
+
+          $changed += 'IPv6 binding (ms_tcpip6)'
+          $results += [pscustomobject]@{ Name='IPv6 binding (ms_tcpip6)'; Keyword='ms_tcpip6'; Action='Changed'; Reason='Applied desired value'; Before=$before; After=$after; Desired=@('Disabled') }
+        } catch {
+          $failed += 'IPv6 binding (ms_tcpip6)'
+          $results += [pscustomobject]@{ Name='IPv6 binding (ms_tcpip6)'; Keyword='ms_tcpip6'; Action='Failed'; Reason="$($_.Exception.Message)"; Before=$before; After=$before; Desired=@('Disabled') }
+        }
+      }
+    } catch {
+      $failed += 'IPv6 binding (ms_tcpip6)'
+      $results += [pscustomobject]@{ Name='IPv6 binding (ms_tcpip6)'; Keyword='ms_tcpip6'; Action='Failed'; Reason="$($_.Exception.Message)"; Before=$null; After=$null; Desired=@('Disabled') }
+    }
+  } else {
+    $skipped += 'IPv6 binding (ms_tcpip6)'
+    $results += [pscustomobject]@{ Name='IPv6 binding (ms_tcpip6)'; Keyword='ms_tcpip6'; Action='Skipped'; Reason='Get-NetAdapterBinding not available'; Before=$null; After=$null; Desired=@('Disabled') }
   }
 
   if (-not $NoRestart -and @($changed).Count -gt 0) {

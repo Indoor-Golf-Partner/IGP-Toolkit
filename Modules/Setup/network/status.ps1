@@ -116,7 +116,7 @@ function Get-OnboardEthernetAdapters {
     return @()
   }
 
-  if (-not $all -or $all.Count -eq 0) { return @() }
+  if ($null -eq $all -or @($all).Count -eq 0) { return @() }
 
   $filtered = $all | Where-Object {
     $desc = "$($_.InterfaceDescription)"
@@ -176,6 +176,31 @@ function Get-NetBindingState {
   try {
     $b = Get-NetAdapterBinding -Name $AdapterName -ComponentID $ComponentId -ErrorAction Stop
     return [bool]$b.Enabled
+  } catch {
+    return $null
+  }
+}
+
+function Get-AdapterAllowPowerOff {
+  param(
+    [Parameter(Mandatory)][string]$AdapterName
+  )
+
+  # Reads the Device Manager -> Power Management checkbox:
+  # "Allow the computer to turn off this device to save power"
+  # Desired: Disabled (False)
+
+  if (-not (Test-CommandExists -Name 'Get-NetAdapterPowerManagement')) { return $null }
+
+  try {
+    $pm = Get-NetAdapterPowerManagement -Name $AdapterName -ErrorAction Stop | Select-Object -First 1
+    if ($null -eq $pm) { return $null }
+
+    if ($pm.PSObject.Properties.Name -contains 'AllowComputerToTurnOffDevice') {
+      return [bool]$pm.AllowComputerToTurnOffDevice
+    }
+
+    return $null
   } catch {
     return $null
   }
@@ -297,7 +322,47 @@ function Get-NetworkStatus {
 
     $ipv6Enabled = Get-NetBindingState -AdapterName $adapter.Name -ComponentId 'ms_tcpip6'
 
+    $allowPowerOff = Get-AdapterAllowPowerOff -AdapterName $adapter.Name
+
     $baselineReport = @()
+
+    # Synthetic checks (not in values.ps1) – language independent
+
+    # Power Management: Allow the computer to turn off this device to save power
+    $pmStatus = 'UNKNOWN'
+    $pmValue  = ''
+    if ($null -ne $allowPowerOff) {
+      $pmValue  = (if ($allowPowerOff) { 'Enabled' } else { 'Disabled' })
+      $pmStatus = (if ($allowPowerOff) { 'NOT OK' } else { 'OK' })
+    }
+
+    $baselineReport += [pscustomobject]@{
+      Order   = -20
+      Name    = 'Allow computer to turn off device'
+      Status  = $pmStatus
+      Value   = $pmValue
+      Desired = 'Disabled'
+      Notes   = 'Power Management tab in Device Manager'
+      Remedy  = 'Disable power saving for this adapter'
+    }
+
+    # IPv6 binding state (ms_tcpip6)
+    $ipv6Status = 'UNKNOWN'
+    $ipv6Value  = ''
+    if ($null -ne $ipv6Enabled) {
+      $ipv6Value  = (if ($ipv6Enabled) { 'Enabled' } else { 'Disabled' })
+      $ipv6Status = (if ($ipv6Enabled) { 'NOT OK' } else { 'OK' })
+    }
+
+    $baselineReport += [pscustomobject]@{
+      Order   = -19
+      Name    = 'IPv6 binding (ms_tcpip6)'
+      Status  = $ipv6Status
+      Value   = $ipv6Value
+      Desired = 'Disabled'
+      Notes   = 'Network adapter binding'
+      Remedy  = 'Disable IPv6 on this adapter'
+    }
 
     foreach ($s in ($baselineSpec | Sort-Object Order)) {
       # AppliesTo filtering (only Vendor for now)
@@ -427,7 +492,6 @@ function Show-NetworkStatus {
     if ($a.Vendor -eq 'Realtek') { $desc = "$desc (Trackman?)" }
     Write-Host "Adapter: $($a.Adapter.Name) | $desc | $($a.Adapter.Status) | $($a.Adapter.LinkSpeed)"
     Write-Host "Vendor: $($a.Vendor)"
-    Write-Host "IPv6 Enabled: $($a.IPv6Enabled)"
     if (-not [string]::IsNullOrWhiteSpace("$($a.Adapter.LocationInformation)")) {
       Write-Host "Location: $($a.Adapter.LocationInformation)"
     }
