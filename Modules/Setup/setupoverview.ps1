@@ -24,6 +24,12 @@ if (-not (Test-Path -LiteralPath $networkStatusPath)) {
 }
 . $networkStatusPath
 
+$networkSetupPath = Join-Path $PSScriptRoot 'network\setup.ps1'
+if (-not (Test-Path -LiteralPath $networkSetupPath)) {
+  throw "Missing module dependency: $networkSetupPath"
+}
+. $networkSetupPath
+
 function Get-ConfirmText {
 @"
 This module ONLY reads settings and reports their current status.
@@ -34,7 +40,41 @@ Do you want to continue?
 }
 
 function RunModule {
-  Show-NetworkStatus
+  #Show the menu
+  while ($true) {
+        Clear-Host
+        Show-NetworkStatus
+        $choice = Show-Menu
+
+        if ($choice -match '^(?i)q$') { return }
+
+        switch ($choice) {
+            '1' {
+                try {
+                    Set-NetworkSettings
+                }
+                catch {
+                    Write-Host "Update failed: $($_.Exception.Message)" -ForegroundColor Red
+                }
+                Read-Host 'Press Enter to continue...' | Out-Null
+            }
+            default {
+                Write-Host 'Invalid selection.' -ForegroundColor Yellow
+                Start-Sleep -Seconds 1
+            }
+        }
+    }
+}
+
+function Show-Menu {
+    Write-Host ""
+    Write-Host "Setup Overview"
+    Write-Host "--------------"
+    Write-Host "  1) Update Network Settings "
+    Write-Host "  Q) Back"
+    Write-Host ""
+
+    return (Read-Host 'Select an option')
 }
 
 # If executed directly (not dot-sourced), run the module.
