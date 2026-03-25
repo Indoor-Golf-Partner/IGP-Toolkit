@@ -83,7 +83,11 @@ $ModuleRegistry = @(
     @{
         Path  = "Modules\Windows\RepairWindowsImage.ps1"
         Title = "Repair Windows System Files (DISM + SFC)"
-    }, 
+    },
+    @{
+        Path  = "Modules\Windows\debloater.ps1"
+        Title = "Debloater"
+    },  
     @{
         Path  = "Modules\Operation\autoshutdown.ps1"
         Title = "Manage automatic shutdown"
