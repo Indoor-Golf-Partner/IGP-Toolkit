@@ -169,9 +169,12 @@ function Install-TPS {
     )
 
     $url = "https://link.trackman.dk/tpsrelease"
+    $progressPreferenceBefore = $global:ProgressPreference
 
     try {
         Write-Log "Downloading latest TPS installer..." 'INFO'
+
+        $global:ProgressPreference = 'Continue'
 
         Invoke-WebRequest `
             -Uri $url `
@@ -186,11 +189,23 @@ function Install-TPS {
         Write-Log "Download complete: $DownloadPath" 'INFO'
         Write-Log "Starting TPS installer..." 'INFO'
 
+        $global:ProgressPreference = $progressPreferenceBefore
+
+        Write-Progress -Activity "Installing TPS" -Status "Launching installer..." -PercentComplete 0
+
         $process = Start-Process `
             -FilePath $DownloadPath `
             -ArgumentList $Arguments `
-            -Wait `
             -PassThru
+
+        while (-not $process.HasExited) {
+            Write-Progress -Activity "Installing TPS" -Status "Installer is running..." -PercentComplete 50
+            Start-Sleep -Milliseconds 500
+            $process.Refresh()
+        }
+
+        Write-Progress -Activity "Installing TPS" -Status "Finishing..." -PercentComplete 100
+        Write-Progress -Activity "Installing TPS" -Completed
 
         if ($process.ExitCode -eq 0) {
             Write-Log "TPS installation completed successfully." 'INFO'
@@ -199,7 +214,11 @@ function Install-TPS {
         }
     }
     catch {
+        Write-Progress -Activity "Installing TPS" -Completed
         Write-Log "Failed to install TPS: $_" 'ERROR'
+    }
+    finally {
+        $global:ProgressPreference = $progressPreferenceBefore
     }
 }
 
