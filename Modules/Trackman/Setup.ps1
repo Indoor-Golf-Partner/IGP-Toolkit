@@ -13,8 +13,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# Module identity
-$script:ModuleName    = 'Set TrackMan GPU Preferences'
+$script:ModuleName    = 'TrackMan Setup'
 $script:RequiresAdmin = $false
 
 #region Confirm Text (Mandatory)
@@ -23,12 +22,14 @@ function Get-ConfirmText {
 $script:ModuleName
 
 This module will:
-- Scan TrackMan installation paths for known executables
-- Set them to use High Performance GPU
-- Clean up invalid GPU preference entries
+- Perform general TrackMan setup and configuration
+- Apply system optimizations
+- Configure required components (GPU, network, etc.)
 
 It may change:
-- Registry: HKCU\Software\Microsoft\DirectX\UserGpuPreferences
+- System settings
+- Registry entries
+- Application configurations
 
 Press Y to continue.
 "@
@@ -60,7 +61,106 @@ function Pause-Continue {
 }
 #endregion Helpers
 
-#region Operations
+ #region Operations
+#region New TPS Autostart/Executable Functions
+function Get-TPSExecutablePath {
+    # Try to locate TPS exe in common locations
+    $candidates = @(
+        "C:\Program Files\TrackMan Performance Studio\TrackMan Performance Studio.exe",
+        "C:\Program Files\TrackMan Performance Studio\Modules\TrackMan.Gui.Shell\TrackMan.Gui.Shell.exe"
+    )
+
+    foreach ($c in $candidates) {
+        if (Test-Path $c) {
+            return $c
+        }
+    }
+
+    return $null
+}
+
+function Test-TPSAutostartEnabled {
+    $taskName = "IGP - Start TPS"
+    return [bool](Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)
+}
+
+function Set-TPSAutostart {
+    param(
+        [string]$ExePath,
+        [int]$DelaySeconds = 10
+    )
+
+    if (-not (Test-Path $ExePath)) {
+        Write-Log "TPS executable not found: $ExePath" 'ERROR'
+        return
+    }
+
+    $taskName = "IGP - Start TPS"
+
+    if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+    }
+
+    $action = New-ScheduledTaskAction -Execute $ExePath
+    $trigger = New-ScheduledTaskTrigger -AtLogOn
+    $trigger.Delay = "PT${DelaySeconds}S"
+
+    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
+
+    Register-ScheduledTask `
+        -TaskName $taskName `
+        -Action $action `
+        -Trigger $trigger `
+        -Principal $principal `
+        -Description "Start TrackMan Performance Studio at logon"
+
+    Write-Log "TPS autostart enabled."
+}
+
+function Disable-TPSAutostart {
+    $taskName = "IGP - Start TPS"
+
+    if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        Write-Log "TPS autostart disabled."
+    } else {
+        Write-Log "TPS autostart was not enabled." 'WARN'
+    }
+}
+
+function Toggle-TPSAutostart {
+    if (Test-TPSAutostartEnabled) {
+        Disable-TPSAutostart
+    } else {
+        $exe = Get-TPSExecutablePath
+        if (-not $exe) {
+            Write-Log "Could not locate TPS executable." 'ERROR'
+            return
+        }
+        Set-TPSAutostart -ExePath $exe
+    }
+}
+#endregion New TPS Autostart/Executable Functions
+
+function Test-TrackManInstalled {
+    param()
+
+    # Known default install locations
+    $defaultPaths = @(
+        "C:\Program Files\TrackMan Performance Studio",
+        "C:\Program Files\TrackMan Performance Studio\Modules\TrackMan.Gui.Shell",
+        "C:\ProgramData\TrackMan\Virtual Golf 2"
+    )
+
+    # Check if any of the known paths exist
+    foreach ($p in $defaultPaths) {
+        if (Test-Path $p) {
+            return $true
+        }
+    }
+
+    return $false
+}
 
 function Normalize-ExeName {
     param([string]$Name)
@@ -75,6 +175,14 @@ function Is-AllowedExe {
 }
 
 function Invoke-ModuleOperation {
+
+    # Check if TrackMan is installed
+    if (-not (Test-TrackManInstalled)) {
+        Write-Log "TrackMan installation not detected. Aborting setup." 'WARN'
+        return
+    }
+
+    Write-Log "TrackMan installation detected. Continuing setup..."
 
     $gpuKey = "HKCU:\Software\Microsoft\DirectX\UserGpuPreferences"
 
@@ -160,7 +268,12 @@ function Invoke-ModuleOperation {
 function Show-Menu {
     Clear-Host
     Write-Host $script:ModuleName
-    Write-Host "1) Apply GPU settings"
+
+    $autoLabel = if (Test-TPSAutostartEnabled) { "Disable TPS Autostart" } else { "Enable TPS Autostart" }
+
+    Write-Host "1) Install latest version of TPS"
+    Write-Host "2) Apply GPU settings"
+    Write-Host "3) $autoLabel"
     Write-Host "Q) Back"
 }
 #endregion Menu
@@ -176,8 +289,17 @@ function RunModule {
         return
     }
 
-    Write-Log "Running $script:ModuleName..."
-    Invoke-ModuleOperation
-    Write-Log "$script:ModuleName completed."
+    while ($true) {
+        Show-Menu
+        $choice = (Read-Host 'Select').Trim().ToUpperInvariant()
+
+        switch ($choice) {
+            '1' { Install-TPS; Pause-Continue }
+            '2' { Invoke-ModuleOperation; Pause-Continue }
+            '3' { Toggle-TPSAutostart; Pause-Continue }
+            'Q' { return }
+            default { Write-Host "Invalid choice."; Pause-Continue }
+        }
+    }
 }
 #endregion Entry Point
