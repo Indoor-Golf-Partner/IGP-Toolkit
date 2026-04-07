@@ -162,6 +162,47 @@ function Test-TrackManInstalled {
     return $false
 }
 
+function Install-TPS {
+    param(
+        [string]$DownloadPath = "$env:TEMP\TPSInstaller.exe",
+        [string]$Arguments = ""
+    )
+
+    $url = "https://link.trackman.dk/tpsrelease"
+
+    try {
+        Write-Log "Downloading latest TPS installer..." 'INFO'
+
+        Invoke-WebRequest `
+            -Uri $url `
+            -OutFile $DownloadPath `
+            -MaximumRedirection 5 `
+            -ErrorAction Stop
+
+        if (-not (Test-Path $DownloadPath)) {
+            throw "Download completed but installer not found."
+        }
+
+        Write-Log "Download complete: $DownloadPath" 'INFO'
+        Write-Log "Starting TPS installer..." 'INFO'
+
+        $process = Start-Process `
+            -FilePath $DownloadPath `
+            -ArgumentList $Arguments `
+            -Wait `
+            -PassThru
+
+        if ($process.ExitCode -eq 0) {
+            Write-Log "TPS installation completed successfully." 'INFO'
+        } else {
+            Write-Log "TPS installer exited with code $($process.ExitCode)" 'WARN'
+        }
+    }
+    catch {
+        Write-Log "Failed to install TPS: $_" 'ERROR'
+    }
+}
+
 function Normalize-ExeName {
     param([string]$Name)
     return ($Name -replace '\s','').ToLowerInvariant()
