@@ -99,6 +99,10 @@ $ModuleRegistry = @(
     @{
         Path  = "Modules\Toolkit\updatetoolkit.ps1"
         Title = "Update IGP Toolkit"
+    },
+    @{
+        Path  = "Modules\Setup\WindowsSettings.ps1"
+        Title = "Windows Settings"
     }
 )
 
