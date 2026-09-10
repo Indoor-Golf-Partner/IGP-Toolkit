@@ -103,6 +103,14 @@ $ModuleRegistry = @(
     @{
         Path  = "Modules\Setup\WindowsSettings.ps1"
         Title = "Windows Settings"
+    },
+    @{
+        Path  = "Modules\Setup\Reseller.ps1"
+        Title = "Reseller Setup"
+    },
+    @{
+        Path  = "Modules\Setup\MachineIdentity.ps1"
+        Title = "Machine Identity"
     }
 )
 
