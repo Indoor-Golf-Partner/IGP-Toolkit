@@ -6,21 +6,23 @@
   Provides a submenu:
     1) Setup for IGP
     2) Setup for GSS
-    3) Enable/Disable writing BIOS serial number to registry at startup
 
-  Options 1/2 write the same support/diagnostics metadata to
+  Both options write the same support/diagnostics metadata to
   HKLM:\SOFTWARE\Indoor Golf Partner\IGP, including both the IGP and GSS
   support contact lines (GSS phone number is a placeholder "xxx" until
   known). The only difference between the two options is the "Reseller"
   value written (IGP or GSS), identifying which company supplied the PC.
 
-  Option 3 toggles a scheduled task ("IGP Write Serial") that runs this
-  script at every startup to refresh just the SerialNumber value from
-  the machine's own BIOS. Enable it once on a master PC before cloning:
-  since the task persists (it isn't a one-time/self-deleting task), it
-  survives imaging and self-corrects the serial number automatically on
-  every future boot of every cloned PC, with no manual step required on
-  the cloned units themselves.
+  Enabling/disabling BIOS serial write-back at startup (Scheduled Task
+  "IGP Write Serial") is managed from the toolkit's Startup Options module
+  - the Register-SerialStartupTask/Disable-SerialStartupTask/
+  Get-ExistingSerialTask functions below still live here since Startup
+  Options calls into them directly rather than duplicating the logic.
+  Enable it once on a master PC before cloning: since the task persists
+  (it isn't a one-time/self-deleting task), it survives imaging and
+  self-corrects the serial number automatically on every future boot of
+  every cloned PC, with no manual step required on the cloned units
+  themselves.
 
 .NOTES
   Requires Administrator privileges (writes to HKLM).
@@ -198,31 +200,12 @@ function Disable-SerialStartupTask {
     Write-Log "Serial write-back at startup disabled."
 }
 
-function Show-SerialTaskStatus {
-    $task = Get-ExistingSerialTask
-    if (-not $task) {
-        Write-Host "Serial write-back at startup: DISABLED (task not found)" -ForegroundColor Yellow
-        return
-    }
-
-    Write-Host "Serial write-back at startup: ENABLED" -ForegroundColor Green
-    Write-Host "  Task: $(Get-SerialTaskName)"
-    Write-Host "  State: $($task.State)"
-}
-
 function Show-Menu {
     Write-Host ""
     Write-Host "Reseller Setup"
     Write-Host "--------------"
     Write-Host "  1) Setup for IGP"
     Write-Host "  2) Setup for GSS"
-
-    if (Get-ExistingSerialTask) {
-        Write-Host "  3) Disable writing BIOS serial number to registry at startup"
-    } else {
-        Write-Host "  3) Enable writing BIOS serial number to registry at startup"
-    }
-
     Write-Host "  Q) Back"
     Write-Host ""
 
@@ -242,7 +225,6 @@ function RunModule {
 
     while ($true) {
         Clear-Host
-        Show-SerialTaskStatus
         $choice = Show-Menu
 
         if ($choice -match '^(?i)q$') { return }
@@ -254,14 +236,6 @@ function RunModule {
             }
             '2' {
                 Invoke-RegistrySetupGSS
-                Read-Host 'Press Enter to continue...' | Out-Null
-            }
-            '3' {
-                if (Get-ExistingSerialTask) {
-                    Disable-SerialStartupTask
-                } else {
-                    Register-SerialStartupTask
-                }
                 Read-Host 'Press Enter to continue...' | Out-Null
             }
             default {

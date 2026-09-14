@@ -8,8 +8,6 @@
     2) Graphics Settings
     3) Registry Settings
     4) Network Settings
-    5) TrackMan at Startup (toggle)
-    6) BGInfo at Startup (toggle)
 
   Power Settings:
   - Loops through all USB ports/controllers and disables "Allow the
@@ -38,24 +36,24 @@
     - Sets Speed & Duplex to 1.0 Gbps Full Duplex.
     - Sets Jumbo Frame/Jumbo Packet to 9014 bytes (9k).
 
-  TrackMan at Startup:
-  - Toggles a Scheduled Task (At Logon, for any interactively logged-on
-    user) that launches TrackMan GUI Shell after a configurable delay,
-    instead of a Startup-folder shortcut. When enabling, prompts for the
-    delay in seconds (default 5 if left blank or not a number).
-
-  BGInfo at Startup:
-  - Toggles a Scheduled Task (At Logon, for any interactively logged-on
-    user) that launches BGInfo silently. When enabling, downloads and
-    extracts BGInfo from the official Sysinternals source into
-    C:\Utilities\bginfo if not already present, then copies igp.bgi/
-    gss.bgi from the toolkit's own resources\bgi folder based on the
-    "Reseller" value written by the Reseller Setup module (defaults to
-    IGP if not set). Also copies the matching background image and sets
-    it as the current user's desktop wallpaper (HKCU, applied once on
-    the master PC before cloning) - the .bgi configs are expected to use
-    BGInfo's "Use Current Wallpaper" option rather than a hardcoded
-    background path.
+  TrackMan Autostart and BGInfo Autostart (both Scheduled Tasks, At Logon
+  for any interactively logged-on user) are enabled/disabled from the
+  toolkit's Startup Options module - the Enable-TrackManAutostart/
+  Disable-TrackManAutostart/Get-ExistingTrackManAutostartTask and
+  Enable-BgInfoAutostart/Disable-BgInfoAutostart/
+  Get-ExistingBgInfoAutostartTask functions below still live here since
+  Startup Options calls into them directly rather than duplicating the
+  logic. TrackMan Autostart launches TrackMan GUI Shell after a
+  configurable delay (prompted at enable-time, default 5 seconds) instead
+  of a Startup-folder shortcut. BGInfo Autostart downloads and extracts
+  BGInfo from the official Sysinternals source into C:\Utilities\bginfo if
+  not already present, then copies igp.bgi/gss.bgi from the toolkit's own
+  resources\bgi folder based on the "Reseller" value written by the
+  Reseller Setup module (defaults to IGP if not set), and copies the
+  matching background image as the current user's desktop wallpaper
+  (HKCU, applied once on the master PC before cloning) - the .bgi configs
+  are expected to use BGInfo's "Use Current Wallpaper" option rather than
+  a hardcoded background path.
 
 .NOTES
   Requires Administrator privileges.
@@ -576,14 +574,6 @@ function Disable-TrackManAutostart {
     Write-Log "TrackMan autostart disabled (task removed)."
 }
 
-function Invoke-TrackManAutostartToggle {
-    if (Get-ExistingTrackManAutostartTask) {
-        Disable-TrackManAutostart
-    } else {
-        Enable-TrackManAutostart
-    }
-}
-
 $script:BgInfoDir     = "C:\Utilities\bginfo"
 $script:BgInfoExePath = Join-Path $script:BgInfoDir "Bginfo64.exe"
 $script:BgInfoZipUrl  = "https://download.sysinternals.com/files/BGInfo.zip"
@@ -757,14 +747,6 @@ function Disable-BgInfoAutostart {
     Write-Log "BGInfo autostart disabled (task removed)."
 }
 
-function Invoke-BgInfoAutostartToggle {
-    if (Get-ExistingBgInfoAutostartTask) {
-        Disable-BgInfoAutostart
-    } else {
-        Enable-BgInfoAutostart
-    }
-}
-
 function Show-Menu {
     Write-Host ""
     Write-Host "Windows Settings"
@@ -773,19 +755,6 @@ function Show-Menu {
     Write-Host "  2) Graphics Settings (TrackMan GPU preference)"
     Write-Host "  3) Registry Settings (Explorer startup delay)"
     Write-Host "  4) Network Settings (choose adapter: power/speed/jumbo frame)"
-
-    if (Get-ExistingTrackManAutostartTask) {
-        Write-Host "  5) Disable TrackMan at Startup"
-    } else {
-        Write-Host "  5) Enable TrackMan at Startup"
-    }
-
-    if (Get-ExistingBgInfoAutostartTask) {
-        Write-Host "  6) Disable BGInfo at Startup"
-    } else {
-        Write-Host "  6) Enable BGInfo at Startup"
-    }
-
     Write-Host "  Q) Back"
     Write-Host ""
 
@@ -818,14 +787,6 @@ function RunModule {
             }
             '4' {
                 Invoke-NetworkSettings
-                Read-Host 'Press Enter to continue...' | Out-Null
-            }
-            '5' {
-                Invoke-TrackManAutostartToggle
-                Read-Host 'Press Enter to continue...' | Out-Null
-            }
-            '6' {
-                Invoke-BgInfoAutostartToggle
                 Read-Host 'Press Enter to continue...' | Out-Null
             }
             default {

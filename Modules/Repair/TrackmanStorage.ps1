@@ -1,33 +1,34 @@
-
-
 <#
 .SYNOPSIS
-  Clear TrackMan Performance Studio cache/temp folders and optionally enable/disable clearing at startup.
+  Trackman Storage module - clear TrackMan cache or reset stored settings
+  (mirrors Android's per-app "Storage" screen: Clear Cache vs Clear Storage).
 
 .DESCRIPTION
-  Clears (deletes contents of) the following folders if they exist:
-    - C:\ProgramData\Trackman\Trackman Performance Studio\Cache
-    - C:\ProgramData\Trackman\Trackman Performance Studio\Temp
-    - C:\ProgramData\Trackman\VideoManagement
-
   Provides a submenu:
-    1) Clear TrackMan Cache
-    2) Enable/Disable clearing cache at startup (Scheduled Task)
+    1) Clear Cache
+    2) Clear Storage
 
-  Startup task name:
-    - IGP Clear Trackman Cache
+  Clear Cache:
+  - Clears (deletes contents of) cache/temp folders:
+      C:\ProgramData\Trackman\Trackman Performance Studio\Cache
+      C:\ProgramData\Trackman\Trackman Performance Studio\Temp
+      C:\ProgramData\Trackman\VideoManagement
+  - Safe, non-destructive; no re-login needed afterwards.
 
-  Startup task action:
-    - Runs PowerShell and executes this script with -Mode Startup
+  Clear Storage:
+  - Deletes TrackMan's per-user settings folders (LOCALAPPDATA, APPDATA,
+    LocalLow) and C:\ProgramData\Trackman\DeviceId.txt.
+  - Destructive - requires logging back into TrackMan afterwards. Prompts
+    for an explicit confirmation before running.
+
+  Enabling/disabling automatic cache clearing at startup (Scheduled Task
+  "IGP Clear Trackman Cache") is managed from the toolkit's Startup Options
+  module - the Register-StartupTask/Disable-StartupTask/Get-ExistingTask
+  functions below still live here since Startup Options calls into them
+  directly rather than duplicating the logic.
 
 .NOTES
-  - Requires Administrator privileges.
-  - For the scheduled task, Windows Task Scheduler runs a program/script; to run a specific function,
-    you typically run PowerShell with a command that dot-sources the script then calls the function,
-    or (cleaner) pass a parameter and let the script decide what to run.
-
-  IMPORTANT:
-  - This file should be saved with a .ps1 extension in the deployed path.
+  Requires Administrator privileges.
 #>
 
 param(
@@ -37,12 +38,12 @@ param(
 
 function Get-ConfirmText {
 @"
-This will delete TrackMan Performance Studio cache/temp data.
+Trackman Storage
 
-Folders affected:
-- C:\ProgramData\Trackman\Trackman Performance Studio\Cache
-- C:\ProgramData\Trackman\Trackman Performance Studio\Temp
-- C:\ProgramData\Trackman\VideoManagement
+This module can:
+- Clear Cache: delete TrackMan Performance Studio cache/temp data (safe).
+- Clear Storage: delete TrackMan's stored settings and device ID (destructive
+  - you will need to log in again).
 
 Do you want to continue?
 "@
@@ -63,18 +64,15 @@ function Test-IsAdmin {
     return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function Get-TaskName { 'IGP Clear Trackman Cache' }
-
-function Get-ExistingTask {
-    $name = Get-TaskName
-    try {
-        return Get-ScheduledTask -TaskName $name -ErrorAction Stop
-    }
-    catch {
-        return $null
-    }
+function Confirm-Action([string]$Message) {
+    Write-Host ""
+    Write-Host $Message
+    Write-Host ""
+    $answer = Read-Host "Continue (y/N)"
+    return ($answer -match '^(y|yes)$')
 }
 
+#region Clear Cache
 function Clear-FolderContents {
     param(
         [Parameter(Mandatory)] [string]$Path
@@ -113,24 +111,80 @@ function Clear-TrackmanCache {
         Clear-FolderContents -Path $p
     }
 }
+#endregion Clear Cache
+
+#region Clear Storage
+function Get-TrackManPathsForCurrentUser {
+    $local    = Join-Path $env:LOCALAPPDATA "TrackMan"
+    $roaming  = Join-Path $env:APPDATA "TrackMan"
+    $localLow = Join-Path $env:USERPROFILE "AppData\LocalLow\TrackMan"
+    return @($local, $localLow, $roaming)
+}
+
+function Remove-FolderIfExists {
+    param([Parameter(Mandatory)] [string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        Write-Log "Not found (skip): $Path"
+        return
+    }
+
+    try {
+        Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+        Write-Log "Deleted folder: $Path"
+    }
+    catch {
+        Write-Log "Failed to delete folder '$Path': $($_.Exception.Message)" 'ERROR'
+    }
+}
+
+function Remove-FileIfExists {
+    param([Parameter(Mandatory)] [string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        Write-Log "Not found (skip): $Path"
+        return
+    }
+
+    try {
+        Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+        Write-Log "Deleted file: $Path"
+    }
+    catch {
+        Write-Log "Failed to delete file '$Path': $($_.Exception.Message)" 'ERROR'
+    }
+}
+
+function Clear-TrackmanStorage {
+    foreach ($p in (Get-TrackManPathsForCurrentUser)) {
+        Remove-FolderIfExists -Path $p
+    }
+
+    Remove-FileIfExists -Path "C:\ProgramData\Trackman\DeviceId.txt"
+}
+#endregion Clear Storage
+
+#region Startup task (cache clearing) - called directly by Startup Options
+function Get-TaskName { 'IGP Clear Trackman Cache' }
+
+function Get-ExistingTask {
+    $name = Get-TaskName
+    try {
+        return Get-ScheduledTask -TaskName $name -ErrorAction Stop
+    }
+    catch {
+        return $null
+    }
+}
 
 function Register-StartupTask {
-    # Resolve the actual script path reliably
     if ([string]::IsNullOrWhiteSpace($PSCommandPath)) {
         throw "Cannot determine script path (PSCommandPath is empty)."
     }
 
     $deployedScript = $PSCommandPath
-
-    if (-not (Test-Path -LiteralPath $deployedScript)) {
-        Write-Log "Deployed script not found at: $deployedScript" 'ERROR'
-        Write-Log "Cannot enable startup clearing until the file exists at that path." 'ERROR'
-        return
-    }
-
     $name = Get-TaskName
 
-    # If it exists, remove first (replace)
     $existing = Get-ExistingTask
     if ($existing) {
         try {
@@ -145,7 +199,6 @@ function Register-StartupTask {
         $psExe = 'powershell.exe'
     }
 
-    # Run the script in Startup mode (non-interactive)
     $arg = "-NoProfile -ExecutionPolicy Bypass -File `"$deployedScript`" -Mode Startup"
 
     $action    = New-ScheduledTaskAction -Execute $psExe -Argument $arg
@@ -172,33 +225,14 @@ function Disable-StartupTask {
     Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction Stop
     Write-Log "Startup cache clearing disabled (task deleted)."
 }
-
-function Show-Status {
-    $task = Get-ExistingTask
-    if (-not $task) {
-        Write-Host "Startup clearing: DISABLED (task not found)" -ForegroundColor Yellow
-        return
-    }
-
-    Write-Host "Startup clearing: ENABLED" -ForegroundColor Green
-    Write-Host "  Task: $(Get-TaskName)"
-    Write-Host "  State: $($task.State)"
-}
+#endregion Startup task
 
 function Show-Menu {
     Write-Host ""
-    Write-Host "Clear TrackMan Cache"
-    Write-Host "--------------------"
-    Write-Host "  1) Clear TrackMan Cache"
-
-    $task = Get-ExistingTask
-    if ($task) {
-        Write-Host "  2) Disable clearing cache at startup"
-    } else {
-        Write-Host "  2) Enable clearing cache at startup"
-    }
-
-    Write-Host "  3) Show status"
+    Write-Host "Trackman Storage"
+    Write-Host "----------------"
+    Write-Host "  1) Clear Cache"
+    Write-Host "  2) Clear Storage"
     Write-Host "  Q) Back"
     Write-Host ""
 
@@ -211,14 +245,13 @@ function RunModule {
     }
 
     if ($Mode -eq 'Startup') {
-        # Non-interactive mode for Scheduled Task
+        # Non-interactive mode for Scheduled Task - cache clearing only
         Clear-TrackmanCache
         return
     }
 
     while ($true) {
         Clear-Host
-        Show-Status
         $choice = Show-Menu
 
         if ($choice -match '^(?i)q$') { return }
@@ -229,16 +262,11 @@ function RunModule {
                 Read-Host 'Press Enter to continue...' | Out-Null
             }
             '2' {
-                $task = Get-ExistingTask
-                if ($task) {
-                    Disable-StartupTask
+                if (Confirm-Action "This will delete all TrackMan settings and the device ID for the current user. You will need to log in again. Make sure TrackMan Performance Studio is closed.") {
+                    Clear-TrackmanStorage
                 } else {
-                    Register-StartupTask
+                    Write-Log "Cancelled." 'WARN'
                 }
-                Read-Host 'Press Enter to continue...' | Out-Null
-            }
-            '3' {
-                Show-Status
                 Read-Host 'Press Enter to continue...' | Out-Null
             }
             default {

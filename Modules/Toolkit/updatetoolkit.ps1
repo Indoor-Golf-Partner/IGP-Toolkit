@@ -11,7 +11,12 @@
 
   Features:
     1) Update toolkit now (git clone/fetch + hard reset to origin/<branch>)
-    2) Enable/Disable auto update via Scheduled Task "IGP Pull IGP Tools" (AtStartup)
+
+  Enabling/disabling auto update via Scheduled Task "IGP Pull IGP Tools"
+  (AtStartup) is managed from the toolkit's Startup Options module - the
+  Register-StartupTask/Disable-StartupTask/Get-ExistingTask functions below
+  still live here since Startup Options calls into them directly rather
+  than duplicating the logic.
 
 .NOTES
   - Requires Administrator privileges (launcher runs elevated).
@@ -81,33 +86,6 @@ function Get-ExistingTask {
     }
     catch {
         return $null
-    }
-}
-
-function Show-Status {
-    $task = Get-ExistingTask
-    if ($task) {
-        Write-Host "Auto update: ENABLED" -ForegroundColor Green
-        Write-Host "  Task:  $(Get-TaskName)"
-        Write-Host "  State: $($task.State)"
-    }
-    else {
-        Write-Host "Auto update: DISABLED" -ForegroundColor Yellow
-    }
-
-    if (Test-Path -LiteralPath (Join-Path $TargetDir '.git')) {
-        try {
-            $hash = (& git -C $TargetDir rev-parse --short HEAD 2>$null).Trim()
-            $br   = (& git -C $TargetDir rev-parse --abbrev-ref HEAD 2>$null).Trim()
-            if ($hash) {
-                Write-Host "Toolkit repo: $TargetDir" -ForegroundColor Cyan
-                Write-Host "  Branch: $br"
-                Write-Host "  Commit: $hash"
-            }
-        }
-        catch {
-            # ignore
-        }
     }
 }
 
@@ -234,16 +212,6 @@ function Show-Menu {
     Write-Host 'Update Toolkit'
     Write-Host '--------------'
     Write-Host '  1) Update toolkit now'
-
-    $task = Get-ExistingTask
-    if ($task) {
-        Write-Host '  2) Disable auto update at startup'
-    }
-    else {
-        Write-Host '  2) Enable auto update at startup'
-    }
-
-    Write-Host '  3) Show status'
     Write-Host '  Q) Back'
     Write-Host ""
     return (Read-Host 'Select an option')
@@ -268,7 +236,6 @@ function RunModule {
 
     while ($true) {
         Clear-Host
-        Show-Status
         $choice = Show-Menu
 
         if ($choice -match '^(?i)q$') { return }
@@ -281,20 +248,6 @@ function RunModule {
                 catch {
                     Write-Log "Update failed: $($_.Exception.Message)" 'ERROR'
                 }
-                Read-Host 'Press Enter to continue...' | Out-Null
-            }
-            '2' {
-                try {
-                    $task = Get-ExistingTask
-                    if ($task) { Disable-StartupTask } else { Register-StartupTask }
-                }
-                catch {
-                    Write-Log "Task operation failed: $($_.Exception.Message)" 'ERROR'
-                }
-                Read-Host 'Press Enter to continue...' | Out-Null
-            }
-            '3' {
-                Show-Status
                 Read-Host 'Press Enter to continue...' | Out-Null
             }
             default {
