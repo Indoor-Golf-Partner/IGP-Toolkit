@@ -8,6 +8,8 @@
     2) Graphics Settings
     3) Registry Settings
     4) Network Settings
+    5) Apply NVIDIA Settings
+    6) Validate NVIDIA Settings
 
   Power Settings:
   - Loops through all USB ports/controllers and disables "Allow the
@@ -35,6 +37,23 @@
       power" for that adapter.
     - Sets Speed & Duplex to 1.0 Gbps Full Duplex.
     - Sets Jumbo Frame/Jumbo Packet to 9014 bytes (9k).
+
+  Apply/Validate NVIDIA Settings:
+  - Downloads NVIDIA Profile Inspector (github.com/Orbmu2k/
+    nvidiaProfileInspector, MIT licensed) into
+    C:\Utilities\NvidiaProfileInspector if not already present, alongside
+    a copy of its license text.
+  - Apply runs it with -silentImport against resources\nvidia\igp.nip
+    (shipped in the toolkit) to set the NVIDIA Control Panel 3D settings
+    normally configured by hand (Low Latency: Ultra, Power Management
+    Mode: Prefer Normal Performance, Texture Filtering Quality, OpenGL
+    Rendering GPU, PhysX Processor). Assumes exactly one NVIDIA GPU per
+    machine, since the GPU-selection settings are stored by slot rather
+    than by model name.
+  - Validate runs it with -exportCustomized to dump the machine's current
+    customized settings, then compares each setting in igp.nip's "Base
+    Profile" against that dump and reports any that are missing or don't
+    match - without changing anything.
 
   TrackMan Autostart and BGInfo Autostart (both Scheduled Tasks, At Logon
   for any interactively logged-on user) are enabled/disabled from the
@@ -66,6 +85,9 @@
   "*JumboPacket") rather than DisplayName, since DisplayName is localized
   in Device Manager depending on Windows display language while
   RegistryKeyword is not.
+  .nip files are XmlSerializer output of NVIDIA Profile Inspector's
+  "Profiles : List<Profile>" class - parsed directly as XML rather than
+  via the tool itself, since it has no query/compare command-line option.
 #>
 
 $script:PowerPlanName        = 'Indoor Golf Partner'
@@ -747,6 +769,159 @@ function Disable-BgInfoAutostart {
     Write-Log "BGInfo autostart disabled (task removed)."
 }
 
+$script:NvidiaToolDir       = "C:\Utilities\NvidiaProfileInspector"
+$script:NvidiaExePath       = Join-Path $script:NvidiaToolDir "nvidiaProfileInspector.exe"
+$script:NvidiaLicensePath   = Join-Path $script:NvidiaToolDir "LICENSE.txt"
+$script:NvidiaReleasesApi   = "https://api.github.com/repos/Orbmu2k/nvidiaProfileInspector/releases/latest"
+$script:NvidiaLicenseUrl    = "https://raw.githubusercontent.com/Orbmu2k/nvidiaProfileInspector/master/LICENSE"
+$script:NvidiaResourcesDir  = Join-Path $script:ToolkitRoot 'resources\nvidia'
+$script:NvidiaNipPath       = Join-Path $script:NvidiaResourcesDir 'igp.nip'
+$script:NvidiaBaseProfile   = 'Base Profile'
+
+function Install-NvidiaProfileInspectorIfMissing {
+    if (Test-Path -LiteralPath $script:NvidiaExePath) {
+        return $true
+    }
+
+    Write-Log "NVIDIA Profile Inspector not found. Downloading latest release from GitHub..."
+
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+        $release = Invoke-RestMethod -Uri $script:NvidiaReleasesApi -Headers @{ 'User-Agent' = 'IGP-Toolkit' } -ErrorAction Stop
+        $asset = $release.assets | Where-Object { $_.name -like '*.zip' } | Select-Object -First 1
+        if (-not $asset) {
+            Write-Log "Could not find a .zip asset in the latest NVIDIA Profile Inspector release." 'ERROR'
+            return $false
+        }
+
+        New-Item -ItemType Directory -Force -Path $script:NvidiaToolDir | Out-Null
+
+        $zipPath = Join-Path $env:TEMP "nvidiaProfileInspector.zip"
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -UseBasicParsing -ErrorAction Stop
+
+        Expand-Archive -LiteralPath $zipPath -DestinationPath $script:NvidiaToolDir -Force -ErrorAction Stop
+        Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+
+        if (-not (Test-Path -LiteralPath $script:NvidiaExePath)) {
+            Write-Log "Download/extract did not produce nvidiaProfileInspector.exe at the expected path." 'ERROR'
+            return $false
+        }
+
+        # MIT license requires the license text to travel with distributed copies.
+        try {
+            Invoke-WebRequest -Uri $script:NvidiaLicenseUrl -OutFile $script:NvidiaLicensePath -UseBasicParsing -ErrorAction Stop
+        }
+        catch {
+            Write-Log "Could not download LICENSE.txt alongside NVIDIA Profile Inspector: $($_.Exception.Message)" 'WARN'
+        }
+
+        Write-Log "NVIDIA Profile Inspector installed to '$script:NvidiaToolDir'."
+        return $true
+    }
+    catch {
+        Write-Log "Failed to download/install NVIDIA Profile Inspector: $($_.Exception.Message)" 'ERROR'
+        return $false
+    }
+}
+
+function Set-NvidiaGlobalProfile {
+    if (-not (Install-NvidiaProfileInspectorIfMissing)) { return }
+
+    if (-not (Test-Path -LiteralPath $script:NvidiaNipPath)) {
+        Write-Log "Settings file not found: $script:NvidiaNipPath" 'ERROR'
+        return
+    }
+
+    Write-Log "Applying NVIDIA global 3D settings from igp.nip..."
+    Start-Process -FilePath $script:NvidiaExePath -ArgumentList "-silentImport `"$script:NvidiaNipPath`"" -Wait -WindowStyle Hidden
+    Write-Log "NVIDIA settings applied."
+}
+
+function Get-NipProfileSettings {
+    param(
+        [Parameter(Mandatory)] [string]$NipPath,
+        [string]$ProfileName = $script:NvidiaBaseProfile
+    )
+
+    if (-not (Test-Path -LiteralPath $NipPath)) { return @() }
+
+    [xml]$xml = Get-Content -LiteralPath $NipPath -Raw
+
+    # .nip files are XmlSerializer output of a "Profiles : List<Profile>" class, so the
+    # root element is normally <Profiles>; fall back to the generic <ArrayOfProfile> shape
+    # in case a different exporter/serializer produced the file.
+    $root = if ($xml.Profiles) { $xml.Profiles } elseif ($xml.ArrayOfProfile) { $xml.ArrayOfProfile } else { $null }
+    if (-not $root) { return @() }
+
+    $profileNode = @($root.Profile) | Where-Object { $_.ProfileName -eq $ProfileName }
+    if (-not $profileNode) { return @() }
+
+    return @($profileNode.Settings.ProfileSetting) | ForEach-Object {
+        [pscustomobject]@{
+            SettingId    = [string]$_.SettingID
+            SettingValue = [string]$_.SettingValue
+        }
+    }
+}
+
+function Test-NvidiaGlobalProfile {
+    if (-not (Test-Path -LiteralPath $script:NvidiaExePath)) {
+        Write-Log "NVIDIA Profile Inspector is not installed. Apply the settings first." 'ERROR'
+        return
+    }
+
+    if (-not (Test-Path -LiteralPath $script:NvidiaNipPath)) {
+        Write-Log "Settings file not found: $script:NvidiaNipPath" 'ERROR'
+        return
+    }
+
+    $expected = Get-NipProfileSettings -NipPath $script:NvidiaNipPath
+    if ($expected.Count -eq 0) {
+        Write-Log "No settings found for '$script:NvidiaBaseProfile' in igp.nip - nothing to validate." 'WARN'
+        return
+    }
+
+    # -exportCustomized writes a timestamped .nip next to the executable; clear old dumps
+    # first so the freshly written one can be found reliably.
+    Get-ChildItem -LiteralPath $script:NvidiaToolDir -Filter '*.nip' -File -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+
+    Write-Log "Exporting current NVIDIA settings for comparison..."
+    Start-Process -FilePath $script:NvidiaExePath -ArgumentList '-exportCustomized' -Wait -WindowStyle Hidden
+
+    $dump = Get-ChildItem -LiteralPath $script:NvidiaToolDir -Filter '*.nip' -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
+    if (-not $dump) {
+        Write-Log "Could not find the exported settings dump. Validation aborted." 'ERROR'
+        return
+    }
+
+    $actual = Get-NipProfileSettings -NipPath $dump.FullName
+    Remove-Item -LiteralPath $dump.FullName -Force -ErrorAction SilentlyContinue
+
+    $mismatches = 0
+    foreach ($exp in $expected) {
+        $match = $actual | Where-Object { $_.SettingId -eq $exp.SettingId }
+        if (-not $match) {
+            Write-Log "Setting $($exp.SettingId): not applied on this machine (expected $($exp.SettingValue))." 'WARN'
+            $mismatches++
+        }
+        elseif ($match.SettingValue -ne $exp.SettingValue) {
+            Write-Log "Setting $($exp.SettingId): expected $($exp.SettingValue), found $($match.SettingValue)." 'WARN'
+            $mismatches++
+        }
+    }
+
+    if ($mismatches -eq 0) {
+        Write-Log "All NVIDIA settings match igp.nip."
+    }
+    else {
+        Write-Log "$mismatches setting(s) did not match igp.nip." 'WARN'
+    }
+}
+
 function Show-Menu {
     Write-Host ""
     Write-Host "Windows Settings"
@@ -755,6 +930,8 @@ function Show-Menu {
     Write-Host "  2) Graphics Settings (TrackMan GPU preference)"
     Write-Host "  3) Registry Settings (Explorer startup delay)"
     Write-Host "  4) Network Settings (choose adapter: power/speed/jumbo frame)"
+    Write-Host "  5) Apply NVIDIA Settings (Control Panel 3D settings via igp.nip)"
+    Write-Host "  6) Validate NVIDIA Settings (compare against igp.nip)"
     Write-Host "  Q) Back"
     Write-Host ""
 
@@ -787,6 +964,14 @@ function RunModule {
             }
             '4' {
                 Invoke-NetworkSettings
+                Read-Host 'Press Enter to continue...' | Out-Null
+            }
+            '5' {
+                Set-NvidiaGlobalProfile
+                Read-Host 'Press Enter to continue...' | Out-Null
+            }
+            '6' {
+                Test-NvidiaGlobalProfile
                 Read-Host 'Press Enter to continue...' | Out-Null
             }
             default {
