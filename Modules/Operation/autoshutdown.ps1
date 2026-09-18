@@ -19,17 +19,6 @@
   - Time format: 24h, e.g. 22:30
 #>
 
-function Get-ConfirmText {
-@"
-This module manages an automatic shutdown task ("IGP Shut Down").
-
-- Setting a time will create or replace a daily scheduled task that shuts down the PC.
-- Disabling will disable the task if it exists.
-
-Do you want to continue?
-"@
-}
-
 function Write-Log {
     param(
         [Parameter(Mandatory)] [string]$Message,
@@ -162,6 +151,10 @@ function Show-Menu {
     Write-Host ""
     Write-Host "Auto Shut Down"
     Write-Host "--------------"
+    Write-Host "Manages an automatic shutdown task (`"IGP Shut Down`"). Setting a time"
+    Write-Host "creates or replaces a daily scheduled task that shuts down the PC;"
+    Write-Host "disabling disables the task if it exists."
+    Write-Host ""
     Write-Host "  1) Set/Replace shutdown time (creates daily task)"
     Write-Host "  2) Disable Auto Shut Down (disables task if it exists)"
     Write-Host "  3) Show current status"

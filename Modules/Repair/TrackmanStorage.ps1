@@ -36,19 +36,6 @@ param(
     [string]$Mode = 'Interactive'
 )
 
-function Get-ConfirmText {
-@"
-Trackman Storage
-
-This module can:
-- Clear Cache: delete TrackMan Performance Studio cache/temp data (safe).
-- Clear Storage: delete TrackMan's stored settings and device ID (destructive
-  - you will need to log in again).
-
-Do you want to continue?
-"@
-}
-
 function Write-Log {
     param(
         [Parameter(Mandatory)] [string]$Message,
@@ -231,6 +218,10 @@ function Show-Menu {
     Write-Host ""
     Write-Host "Trackman Storage"
     Write-Host "----------------"
+    Write-Host "Clear Cache deletes TrackMan Performance Studio cache/temp data (safe)."
+    Write-Host "Clear Storage deletes TrackMan's stored settings and device ID"
+    Write-Host "(destructive - you will need to log in again)."
+    Write-Host ""
     Write-Host "  1) Clear Cache"
     Write-Host "  2) Clear Storage"
     Write-Host "  Q) Back"

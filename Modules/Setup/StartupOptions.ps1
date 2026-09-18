@@ -26,17 +26,6 @@
   Requires Administrator privileges.
 #>
 
-function Get-ConfirmText {
-@"
-Startup Options
-
-This lists everything the toolkit can run automatically at Windows startup
-or logon, and lets you enable or disable each one.
-
-Do you want to continue?
-"@
-}
-
 function Write-Log {
     param(
         [Parameter(Mandatory)] [string]$Message,
@@ -135,6 +124,9 @@ function Show-Menu {
     Write-Host ""
     Write-Host "Startup Options"
     Write-Host "---------------"
+    Write-Host "Lists everything the toolkit can run automatically at Windows startup"
+    Write-Host "or logon, and lets you enable or disable each one."
+    Write-Host ""
 
     for ($i = 0; $i -lt $script:StartupToggles.Count; $i++) {
         $t = $script:StartupToggles[$i]

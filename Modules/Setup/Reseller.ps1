@@ -33,16 +33,6 @@ param(
     [string]$Mode = 'Interactive'
 )
 
-function Get-ConfirmText {
-@"
-Reseller Setup
-
-This module writes reseller/support identification info to the registry.
-
-Do you want to continue?
-"@
-}
-
 function Write-Log {
     param(
         [Parameter(Mandatory)] [string]$Message,
@@ -204,6 +194,8 @@ function Show-Menu {
     Write-Host ""
     Write-Host "Reseller Setup"
     Write-Host "--------------"
+    Write-Host "Writes reseller/support identification info to the registry."
+    Write-Host ""
     Write-Host "  1) Setup for IGP"
     Write-Host "  2) Setup for GSS"
     Write-Host "  Q) Back"

@@ -36,17 +36,6 @@ param(
     [string]$TargetDir = 'C:\Utilities\Indoor Golf Partner\IGP-Toolkit'
 )
 
-function Get-ConfirmText {
-@"
-This will update the IGP Toolkit from GitHub.
-
-- Local changes in the toolkit folder may be overwritten.
-- If the computer is offline, the update will be skipped.
-
-Do you want to continue?
-"@
-}
-
 function Write-Log {
     param(
         [Parameter(Mandatory)] [string]$Message,
@@ -211,6 +200,9 @@ function Show-Menu {
     Write-Host ""
     Write-Host 'Update Toolkit'
     Write-Host '--------------'
+    Write-Host 'Updates the IGP Toolkit from GitHub. Local changes in the toolkit folder'
+    Write-Host 'may be overwritten; if the computer is offline, the update is skipped.'
+    Write-Host ""
     Write-Host '  1) Update toolkit now'
     Write-Host '  Q) Back'
     Write-Host ""

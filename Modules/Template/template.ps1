@@ -4,7 +4,15 @@
 
 .DESCRIPTION
     Copy this file when creating a new module. Fill in ModuleName and implement
-    functions as needed. Mandatory functions: Get-ConfirmText, RunModule.
+    functions as needed. Mandatory function: RunModule.
+
+    Confirmation text: if the module has a real submenu (like this template's
+    Show-Menu), don't define Get-ConfirmText - instead print a short
+    description (statement, not a question) at the top of Show-Menu, above
+    the numbered options. Only define Get-ConfirmText - a classic Y/N "Do you
+    want to continue?" gate shown before anything runs - for a module that
+    runs a single action immediately with no menu at all, since that's its
+    only chance to back out.
 
 .NOTES
     Keep structure consistent across modules.
@@ -16,22 +24,6 @@ $ErrorActionPreference = 'Stop'
 # Module identity
 $script:ModuleName    = 'Template Module'
 $script:RequiresAdmin = $false
-
-#region Confirm Text (Mandatory)
-function Get-ConfirmText {
-    return @"
-$script:ModuleName
-
-This module does:
-- (describe what it does)
-
-It may change:
-- (settings/files)
-
-Press Y to continue.
-"@
-}
-#endregion Confirm Text
 
 #region Logging (Optional)
 function Write-Log {
@@ -69,6 +61,8 @@ function Invoke-ModuleOperation {
 function Show-Menu {
     Clear-Host
     Write-Host $script:ModuleName
+    Write-Host "(describe what this module does, as a statement)"
+    Write-Host ""
     Write-Host "1) Run"
     Write-Host "Q) Back"
 }

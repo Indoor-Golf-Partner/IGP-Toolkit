@@ -29,16 +29,6 @@
   Requires Administrator privileges.
 #>
 
-function Get-ConfirmText {
-@"
-Machine Identity
-
-This module sets the account name, computer name, and Windows license.
-
-Do you want to continue?
-"@
-}
-
 function Write-Log {
     param(
         [Parameter(Mandatory)] [string]$Message,
@@ -204,6 +194,8 @@ function Show-Menu {
     Write-Host ""
     Write-Host "Machine Identity"
     Write-Host "----------------"
+    Write-Host "Sets the account name, computer name, and Windows license."
+    Write-Host ""
     Write-Host "  1) Set Windows Account Name"
     Write-Host "  2) Set Computer Name"
     Write-Host "  3) Set Windows License (status: $(Get-WindowsLicenseStatusText))"

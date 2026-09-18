@@ -121,16 +121,6 @@ $script:TrackManAllowedExeNames = @(
     "Trackman Driving Range 3.exe"
 )
 
-function Get-ConfirmText {
-@"
-Windows Settings
-
-This module applies Windows configuration tweaks for simulator PCs.
-
-Do you want to continue?
-"@
-}
-
 function Write-Log {
     param(
         [Parameter(Mandatory)] [string]$Message,
@@ -926,6 +916,8 @@ function Show-Menu {
     Write-Host ""
     Write-Host "Windows Settings"
     Write-Host "----------------"
+    Write-Host "Applies Windows configuration tweaks for simulator PCs."
+    Write-Host ""
     Write-Host "  1) Power Settings (USB power saving off + 'Indoor Golf Partner' power plan)"
     Write-Host "  2) Graphics Settings (TrackMan GPU preference)"
     Write-Host "  3) Registry Settings (Explorer startup delay)"
