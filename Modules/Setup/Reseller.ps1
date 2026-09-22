@@ -190,6 +190,31 @@ function Disable-SerialStartupTask {
     Write-Log "Serial write-back at startup disabled."
 }
 
+function Test-ResellerSetupApplied {
+    try {
+        $value = (Get-ItemProperty -Path $script:IGPRegistryBaseKey -Name 'Reseller' -ErrorAction Stop).Reseller
+        return [bool]($value -in @('IGP', 'GSS'))
+    }
+    catch {
+        return $false
+    }
+}
+
+function Get-Status {
+    return @(
+        [pscustomobject]@{
+            Title  = 'Reseller Setup'
+            Status = if (Test-ResellerSetupApplied) { 'Confirmed' } else { 'Missing' }
+            Detail = ''
+        }
+        [pscustomobject]@{
+            Title  = 'Write Serial Number at Startup'
+            Status = if (Get-ExistingSerialTask) { 'Confirmed' } else { 'Missing' }
+            Detail = ''
+        }
+    )
+}
+
 function Show-Menu {
     Write-Host ""
     Write-Host "Reseller Setup"

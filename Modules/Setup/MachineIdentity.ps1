@@ -190,6 +190,26 @@ function Set-WindowsLicense {
     }
 }
 
+function Get-Status {
+    return @(
+        [pscustomobject]@{
+            Title  = 'Account Name'
+            Status = 'Info'
+            Detail = $env:USERNAME
+        }
+        [pscustomobject]@{
+            Title  = 'Computer Name'
+            Status = 'Info'
+            Detail = $env:COMPUTERNAME
+        }
+        [pscustomobject]@{
+            Title  = 'Windows License'
+            Status = if (Test-WindowsLicensed) { 'Confirmed' } else { 'Missing' }
+            Detail = Get-WindowsLicenseStatusText
+        }
+    )
+}
+
 function Show-Menu {
     Write-Host ""
     Write-Host "Machine Identity"

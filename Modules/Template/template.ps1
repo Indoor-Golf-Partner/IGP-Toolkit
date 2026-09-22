@@ -14,6 +14,17 @@
     runs a single action immediately with no menu at all, since that's its
     only chance to back out.
 
+    Get-Status (Optional): if this module has something worth surfacing on
+    the Setup Overview page, define Get-Status returning an array of
+    { Title; Status; Detail } objects, Status being one of:
+      'Confirmed' - the setting is applied/present
+      'Missing'   - the setting is not applied/present
+      'Info'      - not a right/wrong check; Detail is just the current value
+    Always return an array, even for a single item, so callers never need to
+    special-case "one object vs. many". Keep the check itself reading the
+    same constants/paths your Set-/Enable- functions already use, rather
+    than redefining "what correct looks like" a second time.
+
 .NOTES
     Keep structure consistent across modules.
 #>
@@ -56,6 +67,20 @@ function Invoke-ModuleOperation {
     Write-Log "Operation not implemented yet." 'WARN'
 }
 #endregion Operations
+
+#region Status (Optional)
+function Get-Status {
+    # Only implement this if the module has something worth surfacing on the
+    # Setup Overview page. Always return an array, even for one item.
+    return @(
+        [pscustomobject]@{
+            Title  = $script:ModuleName
+            Status = 'Missing'   # 'Confirmed' | 'Missing' | 'Info'
+            Detail = ''
+        }
+    )
+}
+#endregion Status
 
 #region Menu (Optional)
 function Show-Menu {

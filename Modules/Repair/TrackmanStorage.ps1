@@ -214,6 +214,16 @@ function Disable-StartupTask {
 }
 #endregion Startup task
 
+function Get-Status {
+    return @(
+        [pscustomobject]@{
+            Title  = 'Clear Trackman Cache at Startup'
+            Status = if (Get-ExistingTask) { 'Confirmed' } else { 'Missing' }
+            Detail = ''
+        }
+    )
+}
+
 function Show-Menu {
     Write-Host ""
     Write-Host "Trackman Storage"

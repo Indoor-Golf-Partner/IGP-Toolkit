@@ -244,18 +244,18 @@ function Invoke-PowerSettings {
     Configure-PowerPlan -planGuid $planGuid
 }
 
+function Test-PowerSettingsApplied {
+    # Single-signal check: is the "Indoor Golf Partner" plan the active one.
+    return [bool]((powercfg /getactivescheme) -match [regex]::Escape($script:PowerPlanName))
+}
+
 function Test-TrackManExeAllowed([string]$fullPath) {
     $leaf = [System.IO.Path]::GetFileName($fullPath)
     if (-not $leaf) { return $false }
     return ($script:TrackManAllowedExeNames -contains $leaf)
 }
 
-function Set-HighPerformanceGpuPreference {
-    Write-Log "Configuring per-app GPU preference (High performance) for TrackMan..."
-
-    $gfxKey = "HKCU:\Software\Microsoft\DirectX\UserGpuPreferences"
-    if (-not (Test-Path $gfxKey)) { New-Item -Path $gfxKey -Force | Out-Null }
-
+function Get-TrackManGpuTargets {
     $targets = New-Object System.Collections.Generic.List[string]
 
     foreach ($p in $script:TrackManPaths) {
@@ -272,7 +272,16 @@ function Set-HighPerformanceGpuPreference {
         }
     }
 
-    $uniqueTargets = $targets | Sort-Object -Unique
+    return @($targets | Sort-Object -Unique)
+}
+
+function Set-HighPerformanceGpuPreference {
+    Write-Log "Configuring per-app GPU preference (High performance) for TrackMan..."
+
+    $gfxKey = "HKCU:\Software\Microsoft\DirectX\UserGpuPreferences"
+    if (-not (Test-Path $gfxKey)) { New-Item -Path $gfxKey -Force | Out-Null }
+
+    $uniqueTargets = Get-TrackManGpuTargets
 
     if (-not $uniqueTargets -or $uniqueTargets.Count -eq 0) {
         Write-Log "No allowed TrackMan executables were found in the known paths." 'WARN'
@@ -322,6 +331,23 @@ function Invoke-GraphicsSettings {
     Set-HighPerformanceGpuPreference
 }
 
+function Test-GraphicsSettingsApplied {
+    $gfxKey = "HKCU:\Software\Microsoft\DirectX\UserGpuPreferences"
+    if (-not (Test-Path $gfxKey)) { return $false }
+
+    $targets = Get-TrackManGpuTargets
+    if ($targets.Count -eq 0) { return $false }
+
+    $existing = Get-ItemProperty -Path $gfxKey -ErrorAction SilentlyContinue
+    if (-not $existing) { return $false }
+
+    foreach ($t in $targets) {
+        $val = $existing.$t
+        if ($val -and $val -like '*GpuPreference=2*') { return $true }
+    }
+    return $false
+}
+
 function Set-ExplorerStartupDelay {
     Write-Log "Configuring Explorer startup delay settings (current user)..."
 
@@ -344,6 +370,16 @@ function Set-ExplorerStartupDelay {
 
 function Invoke-RegistrySettings {
     Set-ExplorerStartupDelay
+}
+
+function Test-RegistrySettingsApplied {
+    $keyPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize"
+    if (-not (Test-Path $keyPath)) { return $false }
+
+    $props = Get-ItemProperty -Path $keyPath -ErrorAction SilentlyContinue
+    if (-not $props) { return $false }
+
+    return ($props.WaitForIdleState -eq 0 -and $props.StartupDelayInMSec -eq 0)
 }
 
 function Get-NetworkAdapterChoice {
@@ -374,17 +410,20 @@ function Get-NetworkAdapterChoice {
     return $map[$sel]
 }
 
+function Get-DevicePowerManagementEntries {
+    param([Parameter(Mandatory)] [string]$InstanceId)
+
+    $powerMgmt = Get-CimInstance -Namespace 'root\wmi' -ClassName MSPower_DeviceEnable -ErrorAction SilentlyContinue
+    if (-not $powerMgmt) { return @() }
+
+    return @($powerMgmt | Where-Object { $_.InstanceName -like "*$InstanceId*" })
+}
+
 function Disable-NicPowerManagement {
     param([Parameter(Mandatory)] $Adapter)
 
-    $powerMgmt = Get-CimInstance -Namespace 'root\wmi' -ClassName MSPower_DeviceEnable -ErrorAction SilentlyContinue
-    if (-not $powerMgmt) {
-        Write-Log "Could not query power management data (MSPower_DeviceEnable)." 'ERROR'
-        return
-    }
-
-    $match = $powerMgmt | Where-Object { $_.InstanceName -like "*$($Adapter.PnPDeviceID)*" }
-    if (-not $match) {
+    $match = Get-DevicePowerManagementEntries -InstanceId $Adapter.PnPDeviceID
+    if ($match.Count -eq 0) {
         Write-Log "No power management data found for '$($Adapter.Name)'." 'WARN'
         return
     }
@@ -472,15 +511,28 @@ function Set-NicAdvancedPropertyBestEffort {
     Write-Log "Failed to set $SettingLabel on '$($Adapter.Name)'. Available values: $($prop.ValidDisplayValues -join ', ')" 'ERROR'
 }
 
+# Shared by both the Set- functions below and their Test- counterparts, so the
+# "what does correct look like" definition only lives in one place.
+$script:SpeedDuplexRegistryKeywords    = @('*SpeedDuplex')
+$script:SpeedDuplexDisplayNameFallback = @('Speed & Duplex','Speed and Duplex','Link Speed & Duplex','Speed/Duplex')
+$script:SpeedDuplexValidPattern        = '(?i)(1\.?0?\s*Gb|1000\s*Mb).*full|(?i)full.*(1\.?0?\s*Gb|1000\s*Mb)'
+$script:SpeedDuplexDisplayCandidates   = @('1.0 Gbps Full Duplex','1.0 Gbps Full','1 Gbps Full Duplex','1000Mbps Full Duplex','1000 Mbps Full Duplex')
+
+$script:JumboFrameRegistryKeywords     = @('*JumboPacket')
+$script:JumboFrameDisplayNameFallback  = @('Jumbo Frame','Jumbo Packet','JumboPacket','Jumbo MTU','MTU')
+$script:JumboFrameRegistryValue        = '9014'
+$script:JumboFrameValidPattern         = '9014|9\s*k'
+$script:JumboFrameDisplayCandidates    = @('9014 Bytes','9014','9 KB','9KB MTU','9k','9K')
+
 function Set-NicSpeedDuplex1G {
     param([Parameter(Mandatory)] $Adapter)
 
     Set-NicAdvancedPropertyBestEffort -Adapter $Adapter `
         -SettingLabel 'Speed & Duplex' `
-        -RegistryKeywords @('*SpeedDuplex') `
-        -DisplayNameFallbacks @('Speed & Duplex','Speed and Duplex','Link Speed & Duplex','Speed/Duplex') `
-        -ValidValuePattern '(?i)(1\.?0?\s*Gb|1000\s*Mb).*full|(?i)full.*(1\.?0?\s*Gb|1000\s*Mb)' `
-        -DisplayValueCandidates @('1.0 Gbps Full Duplex','1.0 Gbps Full','1 Gbps Full Duplex','1000Mbps Full Duplex','1000 Mbps Full Duplex')
+        -RegistryKeywords $script:SpeedDuplexRegistryKeywords `
+        -DisplayNameFallbacks $script:SpeedDuplexDisplayNameFallback `
+        -ValidValuePattern $script:SpeedDuplexValidPattern `
+        -DisplayValueCandidates $script:SpeedDuplexDisplayCandidates
 }
 
 function Set-NicJumboFrame9014 {
@@ -490,11 +542,11 @@ function Set-NicJumboFrame9014 {
     # even though the displayed text differs by vendor ("9014 Bytes", "9 KB", "9k", ...).
     Set-NicAdvancedPropertyBestEffort -Adapter $Adapter `
         -SettingLabel 'Jumbo Frame' `
-        -RegistryKeywords @('*JumboPacket') `
-        -DisplayNameFallbacks @('Jumbo Frame','Jumbo Packet','JumboPacket','Jumbo MTU','MTU') `
-        -RegistryValue '9014' `
-        -ValidValuePattern '9014|9\s*k' `
-        -DisplayValueCandidates @('9014 Bytes','9014','9 KB','9KB MTU','9k','9K')
+        -RegistryKeywords $script:JumboFrameRegistryKeywords `
+        -DisplayNameFallbacks $script:JumboFrameDisplayNameFallback `
+        -RegistryValue $script:JumboFrameRegistryValue `
+        -ValidValuePattern $script:JumboFrameValidPattern `
+        -DisplayValueCandidates $script:JumboFrameDisplayCandidates
 }
 
 function Invoke-NetworkSettings {
@@ -507,6 +559,60 @@ function Invoke-NetworkSettings {
     Disable-NicPowerManagement -Adapter $adapter
     Set-NicSpeedDuplex1G -Adapter $adapter
     Set-NicJumboFrame9014 -Adapter $adapter
+}
+
+function Test-NicPowerManagementDisabled {
+    param([Parameter(Mandatory)] $Adapter)
+
+    $match = Get-DevicePowerManagementEntries -InstanceId $Adapter.PnPDeviceID
+    if ($match.Count -eq 0) { return $false }
+
+    return -not [bool]($match | Where-Object { $_.Enable } | Select-Object -First 1)
+}
+
+function Test-NicSettingApplied {
+    param(
+        [Parameter(Mandatory)] $Adapter,
+        [Parameter(Mandatory)] [string[]]$RegistryKeywords,
+        [Parameter(Mandatory)] [string[]]$DisplayNameFallbacks,
+        [Parameter(Mandatory)] [string]$ValidValuePattern
+    )
+
+    if (-not (Get-Command Get-NetAdapterAdvancedProperty -ErrorAction SilentlyContinue)) { return $false }
+
+    $props = Get-NetAdapterAdvancedProperty -Name $Adapter.Name -ErrorAction SilentlyContinue
+    if (-not $props) { return $false }
+
+    $prop = $props | Where-Object { $_.RegistryKeyword -in $RegistryKeywords } | Select-Object -First 1
+    if (-not $prop) {
+        $prop = $props | Where-Object { $_.DisplayName -in $DisplayNameFallbacks } | Select-Object -First 1
+    }
+    if (-not $prop) { return $false }
+
+    return [bool]($prop.DisplayValue -match $ValidValuePattern)
+}
+
+function Test-NetworkSettingsApplied {
+    $adapters = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue)
+    $matching = @()
+
+    foreach ($a in $adapters) {
+        $powerOk = Test-NicPowerManagementDisabled -Adapter $a
+        $speedOk = Test-NicSettingApplied -Adapter $a `
+            -RegistryKeywords $script:SpeedDuplexRegistryKeywords `
+            -DisplayNameFallbacks $script:SpeedDuplexDisplayNameFallback `
+            -ValidValuePattern $script:SpeedDuplexValidPattern
+        $jumboOk = Test-NicSettingApplied -Adapter $a `
+            -RegistryKeywords $script:JumboFrameRegistryKeywords `
+            -DisplayNameFallbacks $script:JumboFrameDisplayNameFallback `
+            -ValidValuePattern $script:JumboFrameValidPattern
+
+        if ($powerOk -and $speedOk -and $jumboOk) {
+            $matching += $a.Name
+        }
+    }
+
+    return $matching
 }
 
 $script:TrackManGuiShellPath       = "C:\Program Files\TrackMan Performance Studio\Modules\TrackMan.Gui.Shell.exe"
@@ -855,6 +961,45 @@ function Get-NipProfileSettings {
     }
 }
 
+function Compare-NvidiaGlobalProfile {
+    # Core comparison, reused by both the interactive Validate option and Get-Status.
+    # Returns $null if the comparison couldn't run at all (tool/file missing), otherwise
+    # @{ Expected = <int>; Mismatches = <string[]> }.
+    if (-not (Test-Path -LiteralPath $script:NvidiaExePath)) { return $null }
+    if (-not (Test-Path -LiteralPath $script:NvidiaNipPath)) { return $null }
+
+    $expected = Get-NipProfileSettings -NipPath $script:NvidiaNipPath
+    if ($expected.Count -eq 0) { return @{ Expected = 0; Mismatches = @() } }
+
+    # -exportCustomized writes a timestamped .nip next to the executable; clear old dumps
+    # first so the freshly written one can be found reliably.
+    Get-ChildItem -LiteralPath $script:NvidiaToolDir -Filter '*.nip' -File -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+
+    Start-Process -FilePath $script:NvidiaExePath -ArgumentList '-exportCustomized' -Wait -WindowStyle Hidden
+
+    $dump = Get-ChildItem -LiteralPath $script:NvidiaToolDir -Filter '*.nip' -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
+    if (-not $dump) { return $null }
+
+    $actual = Get-NipProfileSettings -NipPath $dump.FullName
+    Remove-Item -LiteralPath $dump.FullName -Force -ErrorAction SilentlyContinue
+
+    $mismatches = @()
+    foreach ($exp in $expected) {
+        $match = $actual | Where-Object { $_.SettingId -eq $exp.SettingId }
+        if (-not $match) {
+            $mismatches += "Setting $($exp.SettingId): not applied on this machine (expected $($exp.SettingValue))."
+        }
+        elseif ($match.SettingValue -ne $exp.SettingValue) {
+            $mismatches += "Setting $($exp.SettingId): expected $($exp.SettingValue), found $($match.SettingValue)."
+        }
+    }
+
+    return @{ Expected = $expected.Count; Mismatches = $mismatches }
+}
+
 function Test-NvidiaGlobalProfile {
     if (-not (Test-Path -LiteralPath $script:NvidiaExePath)) {
         Write-Log "NVIDIA Profile Inspector is not installed. Apply the settings first." 'ERROR'
@@ -866,50 +1011,81 @@ function Test-NvidiaGlobalProfile {
         return
     }
 
-    $expected = Get-NipProfileSettings -NipPath $script:NvidiaNipPath
-    if ($expected.Count -eq 0) {
-        Write-Log "No settings found for '$script:NvidiaBaseProfile' in igp.nip - nothing to validate." 'WARN'
-        return
-    }
-
-    # -exportCustomized writes a timestamped .nip next to the executable; clear old dumps
-    # first so the freshly written one can be found reliably.
-    Get-ChildItem -LiteralPath $script:NvidiaToolDir -Filter '*.nip' -File -ErrorAction SilentlyContinue |
-        Remove-Item -Force -ErrorAction SilentlyContinue
-
     Write-Log "Exporting current NVIDIA settings for comparison..."
-    Start-Process -FilePath $script:NvidiaExePath -ArgumentList '-exportCustomized' -Wait -WindowStyle Hidden
+    $result = Compare-NvidiaGlobalProfile
 
-    $dump = Get-ChildItem -LiteralPath $script:NvidiaToolDir -Filter '*.nip' -File -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTime -Descending | Select-Object -First 1
-
-    if (-not $dump) {
+    if (-not $result) {
         Write-Log "Could not find the exported settings dump. Validation aborted." 'ERROR'
         return
     }
 
-    $actual = Get-NipProfileSettings -NipPath $dump.FullName
-    Remove-Item -LiteralPath $dump.FullName -Force -ErrorAction SilentlyContinue
-
-    $mismatches = 0
-    foreach ($exp in $expected) {
-        $match = $actual | Where-Object { $_.SettingId -eq $exp.SettingId }
-        if (-not $match) {
-            Write-Log "Setting $($exp.SettingId): not applied on this machine (expected $($exp.SettingValue))." 'WARN'
-            $mismatches++
-        }
-        elseif ($match.SettingValue -ne $exp.SettingValue) {
-            Write-Log "Setting $($exp.SettingId): expected $($exp.SettingValue), found $($match.SettingValue)." 'WARN'
-            $mismatches++
-        }
+    if ($result.Expected -eq 0) {
+        Write-Log "No settings found for '$script:NvidiaBaseProfile' in igp.nip - nothing to validate." 'WARN'
+        return
     }
 
-    if ($mismatches -eq 0) {
+    if ($result.Mismatches.Count -eq 0) {
         Write-Log "All NVIDIA settings match igp.nip."
     }
     else {
-        Write-Log "$mismatches setting(s) did not match igp.nip." 'WARN'
+        $result.Mismatches | ForEach-Object { Write-Log $_ 'WARN' }
+        Write-Log "$($result.Mismatches.Count) setting(s) did not match igp.nip." 'WARN'
     }
+}
+
+function Get-Status {
+    $rows = @(
+        [pscustomobject]@{
+            Title  = 'Power Settings'
+            Status = if (Test-PowerSettingsApplied) { 'Confirmed' } else { 'Missing' }
+            Detail = ''
+        }
+        [pscustomobject]@{
+            Title  = 'Graphics Settings'
+            Status = if (Test-GraphicsSettingsApplied) { 'Confirmed' } else { 'Missing' }
+            Detail = ''
+        }
+        [pscustomobject]@{
+            Title  = 'Registry Settings'
+            Status = if (Test-RegistrySettingsApplied) { 'Confirmed' } else { 'Missing' }
+            Detail = ''
+        }
+    )
+
+    $matchingAdapters = Test-NetworkSettingsApplied
+    $rows += [pscustomobject]@{
+        Title  = 'Network Settings'
+        Status = if ($matchingAdapters.Count -gt 0) { 'Confirmed' } else { 'Missing' }
+        Detail = ($matchingAdapters -join ', ')
+    }
+
+    $nvResult = Compare-NvidiaGlobalProfile
+    if (-not $nvResult) {
+        $rows += [pscustomobject]@{ Title = 'NVIDIA Settings'; Status = 'Missing'; Detail = 'Not installed or igp.nip missing' }
+    }
+    elseif ($nvResult.Expected -eq 0) {
+        $rows += [pscustomobject]@{ Title = 'NVIDIA Settings'; Status = 'Missing'; Detail = 'igp.nip has no settings to compare' }
+    }
+    elseif ($nvResult.Mismatches.Count -eq 0) {
+        $rows += [pscustomobject]@{ Title = 'NVIDIA Settings'; Status = 'Confirmed'; Detail = '' }
+    }
+    else {
+        $rows += [pscustomobject]@{ Title = 'NVIDIA Settings'; Status = 'Missing'; Detail = "$($nvResult.Mismatches.Count) setting(s) mismatched" }
+    }
+
+    $rows += [pscustomobject]@{
+        Title  = 'TrackMan Autostart'
+        Status = if (Get-ExistingTrackManAutostartTask) { 'Confirmed' } else { 'Missing' }
+        Detail = ''
+    }
+
+    $rows += [pscustomobject]@{
+        Title  = 'BGInfo Autostart'
+        Status = if (Get-ExistingBgInfoAutostartTask) { 'Confirmed' } else { 'Missing' }
+        Detail = ''
+    }
+
+    return $rows
 }
 
 function Show-Menu {

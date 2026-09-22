@@ -196,6 +196,16 @@ function Disable-StartupTask {
     Write-Log 'Auto update disabled (task deleted).'
 }
 
+function Get-Status {
+    return @(
+        [pscustomobject]@{
+            Title  = 'Auto-update Toolkit at Startup'
+            Status = if (Get-ExistingTask) { 'Confirmed' } else { 'Missing' }
+            Detail = ''
+        }
+    )
+}
+
 function Show-Menu {
     Write-Host ""
     Write-Host 'Update Toolkit'

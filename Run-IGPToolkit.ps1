@@ -113,6 +113,10 @@ $ModuleRegistry = @(
         Title = "Debloater"
     },
     @{
+        Path  = "Modules\Setup\Overview.ps1"
+        Title = "Overview"
+    },
+    @{
         Path  = "Modules\Toolkit\updatetoolkit.ps1"
         Title = "Update IGP Toolkit"
     }
