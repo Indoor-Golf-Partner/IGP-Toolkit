@@ -95,7 +95,9 @@
   a hardcoded background path. Copying also removes the other brand's
   stale .bgi/.jpg from C:\Utilities\bginfo, and Reseller Setup calls back
   into Enable-BgInfoAutostart automatically if a PC is switched from one
-  reseller to the other after BGInfo Autostart was already enabled.
+  reseller to the other after BGInfo Autostart was already enabled. Also
+  runs BGInfo immediately (not just at next logon) as a visual
+  confirmation that the right branding actually applied.
 
 .NOTES
   Requires Administrator privileges.
@@ -1082,6 +1084,16 @@ function Enable-BgInfoAutostart {
     Write-Log "Enabling BGInfo autostart at logon (config: $([System.IO.Path]::GetFileName($bgiPath)))..."
     Register-ScheduledTask -TaskName $name -InputObject $task -Force -ErrorAction Stop | Out-Null
     Write-Log "BGInfo autostart enabled (task: '$name')."
+
+    # Run it now too, not just at next logon - an immediate visual confirmation that the
+    # right branding actually applied, rather than waiting to see it until signing back in.
+    try {
+        Start-Process -FilePath $script:BgInfoExePath -ArgumentList $arguments -WorkingDirectory $script:BgInfoDir -Wait -ErrorAction Stop
+        Write-Log "BGInfo applied now as a visual confirmation."
+    }
+    catch {
+        Write-Log "Enabled, but failed to run BGInfo immediately: $($_.Exception.Message)" 'WARN'
+    }
 }
 
 function Disable-BgInfoAutostart {
