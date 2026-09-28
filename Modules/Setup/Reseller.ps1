@@ -9,17 +9,21 @@
 
   Both options write the same support/diagnostics metadata to
   HKLM:\SOFTWARE\Indoor Golf Partner\IGP, including both the IGP and GSS
-  support contact lines (GSS phone number is a placeholder "xxx" until
-  known). The only difference between the two options is the "Reseller"
-  value written (IGP or GSS), identifying which company supplied the PC.
+  support contact lines. The only difference between the two options is
+  the "Reseller" value written (IGP or GSS), identifying which company
+  supplied the PC. SerialNumber, CustomerName, and SupportPortal are only
+  ever set the first time (when the registry key doesn't exist yet) -
+  re-running either option to switch brands never overwrites a real
+  value already filled in for those three.
 
-  If BGInfo Autostart (Windows Settings) is already enabled when this runs,
-  it's automatically re-synced for the new Reseller value - re-copying the
-  correct igp/gss .bgi and wallpaper, cleaning up the other brand's stale
-  files, and re-pointing the scheduled task - via the same cross-module,
-  isolated-dot-source call Startup Options/Overview already use, so a PC
-  switched from one reseller to the other doesn't keep showing the old
-  brand until someone thinks to toggle BGInfo off and back on.
+  Every run also stages the correct igp/gss .bgi, wallpaper, and cleans
+  up the other brand's stale files in C:\Utilities\bginfo (via Windows
+  Settings' Sync-BgInfoAssetsForCurrentReseller, called cross-module the
+  same isolated-dot-source way Startup Options/Overview already do) -
+  regardless of whether BGInfo Autostart itself is turned on, so the
+  files/wallpaper always reflect the chosen brand. If BGInfo Autostart is
+  already enabled, its scheduled task is also re-pointed and run
+  immediately as a visual confirmation.
 
   Enabling/disabling BIOS serial write-back at startup (Scheduled Task
   "IGP Write Serial") is managed from the toolkit's Startup Options module
@@ -84,17 +88,39 @@ function Invoke-InModuleScope {
     } $ModulePath $FunctionName
 }
 
-function Sync-BgInfoBrandingIfEnabled {
-    # If BGInfo Autostart is already turned on, switching reseller here would otherwise
-    # leave it silently showing the old brand's config/wallpaper until someone thinks to
-    # disable and re-enable that toggle. Re-running its Enable function re-copies the
-    # correct .bgi/.jpg for whatever Reseller now is and re-points the scheduled task -
-    # same logic Windows Settings' own "Enable" already runs, just triggered here too.
+function Sync-BgInfoBranding {
+    # Always stage the correct .bgi/.jpg + desktop wallpaper for the new Reseller value,
+    # regardless of whether BGInfo Autostart itself is turned on - so the files are ready
+    # to go the moment that toggle IS enabled, and the wallpaper reflects the chosen
+    # brand immediately either way.
+    Write-Log "Staging BGInfo assets (.bgi/.jpg + wallpaper) for the new Reseller value..."
+    Invoke-InModuleScope -ModulePath $script:WindowsSettingsPath -FunctionName 'Sync-BgInfoAssetsForCurrentReseller' | Out-Null
+
+    # If BGInfo Autostart is already enabled, also re-point its scheduled task and run it
+    # immediately as a visual confirmation - same logic Windows Settings' own "Enable"
+    # already runs, just triggered here too, so a PC switched from one reseller to the
+    # other doesn't keep showing the old brand until someone thinks to toggle it off/on.
     $existingTask = Invoke-InModuleScope -ModulePath $script:WindowsSettingsPath -FunctionName 'Get-ExistingBgInfoAutostartTask'
     if (-not $existingTask) { return }
 
-    Write-Log "BGInfo Autostart is enabled - re-syncing its branding for the new Reseller value..."
+    Write-Log "BGInfo Autostart is enabled - re-syncing its scheduled task too..."
     Invoke-InModuleScope -ModulePath $script:WindowsSettingsPath -FunctionName 'Enable-BgInfoAutostart' | Out-Null
+}
+
+function Get-PreservedOrDefault {
+    param(
+        [Parameter(Mandatory)] [string]$Name,
+        [Parameter(Mandatory)] [AllowEmptyString()] [string]$Default
+    )
+
+    try {
+        $existing = (Get-ItemProperty -Path $script:IGPRegistryBaseKey -Name $Name -ErrorAction Stop).$Name
+        if (-not [string]::IsNullOrWhiteSpace($existing)) { return $existing }
+    }
+    catch {
+        # Property doesn't exist yet - use the default (first-time setup)
+    }
+    return $Default
 }
 
 function Set-IGPRegistryInfo {
@@ -114,12 +140,19 @@ function Set-IGPRegistryInfo {
             New-Item -Path $script:IGPRegistryBaseKey -Force | Out-Null
         }
 
+        # These three are set once (first run) and then left alone - re-running Reseller
+        # Setup (e.g. to switch brands) must never clobber a real serial number, customer
+        # name, or support portal URL that's already been filled in.
+        $SerialNumber  = Get-PreservedOrDefault -Name 'SerialNumber'  -Default $SerialNumber
+        $CustomerName  = Get-PreservedOrDefault -Name 'CustomerName'  -Default $CustomerName
+        $SupportPortal = Get-PreservedOrDefault -Name 'SupportPortal' -Default $SupportPortal
+
         $values = @{
             SerialNumber    = $SerialNumber
             CustomerName    = $CustomerName
             TrackManSupport = "support@trackman.com | +45 4574 4742"
             IGPSupport      = "support@igpartner.dk | +46 470-52 82 70"
-            GSSSupport      = "xxx"
+            GSSSupport      = "+441483319882"
             Reseller        = $Reseller
             SupportPortal   = $SupportPortal
             ImageID         = $ImageID
@@ -136,7 +169,7 @@ function Set-IGPRegistryInfo {
         }
 
         Write-Log "Registry information written."
-        Sync-BgInfoBrandingIfEnabled
+        Sync-BgInfoBranding
     }
     catch {
         Write-Log "Failed to write registry info: $($_.Exception.Message)" 'ERROR'

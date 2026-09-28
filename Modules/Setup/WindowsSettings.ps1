@@ -86,18 +86,19 @@
   configurable delay (prompted at enable-time, default 5 seconds) instead
   of a Startup-folder shortcut. BGInfo Autostart downloads and extracts
   BGInfo from the official Sysinternals source into C:\Utilities\bginfo if
-  not already present, then copies igp.bgi/gss.bgi from the toolkit's own
-  resources\bgi folder based on the "Reseller" value written by the
-  Reseller Setup module (defaults to IGP if not set), and copies the
-  matching background image as the current user's desktop wallpaper
-  (HKCU, applied once on the master PC before cloning) - the .bgi configs
-  are expected to use BGInfo's "Use Current Wallpaper" option rather than
-  a hardcoded background path. Copying also removes the other brand's
-  stale .bgi/.jpg from C:\Utilities\bginfo, and Reseller Setup calls back
-  into Enable-BgInfoAutostart automatically if a PC is switched from one
-  reseller to the other after BGInfo Autostart was already enabled. Also
-  runs BGInfo immediately (not just at next logon) as a visual
-  confirmation that the right branding actually applied.
+  not already present. Copying igp.bgi/gss.bgi (based on the "Reseller"
+  value written by the Reseller Setup module) and the matching wallpaper
+  is factored into Sync-BgInfoAssetsForCurrentReseller, called both by
+  Enable-BgInfoAutostart here and directly by Reseller Setup every time
+  it runs (cross-module, regardless of whether BGInfo Autostart itself is
+  enabled) - so the staged files/wallpaper always reflect the chosen
+  brand, not just once autostart is turned on. The wallpaper is applied
+  to the current user (HKCU) - the .bgi configs are expected to use
+  BGInfo's "Use Current Wallpaper" option rather than a hardcoded
+  background path. Copying also removes the other brand's stale
+  .bgi/.jpg from C:\Utilities\bginfo. If BGInfo Autostart is already
+  enabled when Reseller Setup runs, its scheduled task is also
+  re-pointed and BGInfo is run immediately as a visual confirmation.
 
 .NOTES
   Requires Administrator privileges.
@@ -1049,8 +1050,13 @@ function Install-BgInfoIfMissing {
     }
 }
 
-function Enable-BgInfoAutostart {
-    if (-not (Install-BgInfoIfMissing)) { return }
+function Sync-BgInfoAssetsForCurrentReseller {
+    # Stages the correct .bgi/.jpg + desktop wallpaper for whatever Reseller is
+    # currently set, independent of whether BGInfo Autostart itself is enabled -
+    # so Reseller Setup can call this unconditionally (files/wallpaper should
+    # always reflect the chosen brand) while only Enable-BgInfoAutostart below
+    # also touches the scheduled task.
+    if (-not (Install-BgInfoIfMissing)) { return $null }
 
     $reseller = Get-ConfiguredReseller
     if (-not $reseller) {
@@ -1058,7 +1064,11 @@ function Enable-BgInfoAutostart {
         $reseller = 'IGP'
     }
 
-    $bgiPath = Copy-BgiAssets -Reseller $reseller
+    return Copy-BgiAssets -Reseller $reseller
+}
+
+function Enable-BgInfoAutostart {
+    $bgiPath = Sync-BgInfoAssetsForCurrentReseller
     if (-not $bgiPath) { return }
 
     $name = Get-BgInfoAutostartTaskName
