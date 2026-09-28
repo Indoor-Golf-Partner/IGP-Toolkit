@@ -92,7 +92,10 @@
   matching background image as the current user's desktop wallpaper
   (HKCU, applied once on the master PC before cloning) - the .bgi configs
   are expected to use BGInfo's "Use Current Wallpaper" option rather than
-  a hardcoded background path.
+  a hardcoded background path. Copying also removes the other brand's
+  stale .bgi/.jpg from C:\Utilities\bginfo, and Reseller Setup calls back
+  into Enable-BgInfoAutostart automatically if a PC is switched from one
+  reseller to the other after BGInfo Autostart was already enabled.
 
 .NOTES
   Requires Administrator privileges.
@@ -966,6 +969,22 @@ public static extern int SystemParametersInfo(int uAction, int uParam, string lp
     }
 }
 
+function Remove-StaleBgiAssets {
+    param([Parameter(Mandatory)] [string]$KeepPrefix)
+
+    # A PC that was set up as one reseller and later switched to the other shouldn't
+    # keep the old brand's .bgi/.jpg sitting in the bginfo folder alongside the new one.
+    $otherPrefix = if ($KeepPrefix -eq 'igp') { 'gss' } else { 'igp' }
+
+    foreach ($ext in @('bgi', 'jpg')) {
+        $stale = Join-Path $script:BgInfoDir "$otherPrefix.$ext"
+        if (Test-Path -LiteralPath $stale) {
+            Remove-Item -LiteralPath $stale -Force -ErrorAction SilentlyContinue
+            Write-Log "Removed stale '$otherPrefix.$ext' from '$script:BgInfoDir'."
+        }
+    }
+}
+
 function Copy-BgiAssets {
     param([Parameter(Mandatory)] [ValidateSet('IGP','GSS')] [string]$Reseller)
 
@@ -990,6 +1009,8 @@ function Copy-BgiAssets {
     else {
         Write-Log "No background image found in toolkit resources for '$prefix' ($sourceJpg); wallpaper left unchanged." 'WARN'
     }
+
+    Remove-StaleBgiAssets -KeepPrefix $prefix
 
     return $destBgi
 }

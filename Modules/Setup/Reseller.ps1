@@ -13,6 +13,14 @@
   known). The only difference between the two options is the "Reseller"
   value written (IGP or GSS), identifying which company supplied the PC.
 
+  If BGInfo Autostart (Windows Settings) is already enabled when this runs,
+  it's automatically re-synced for the new Reseller value - re-copying the
+  correct igp/gss .bgi and wallpaper, cleaning up the other brand's stale
+  files, and re-pointing the scheduled task - via the same cross-module,
+  isolated-dot-source call Startup Options/Overview already use, so a PC
+  switched from one reseller to the other doesn't keep showing the old
+  brand until someone thinks to toggle BGInfo off and back on.
+
   Enabling/disabling BIOS serial write-back at startup (Scheduled Task
   "IGP Write Serial") is managed from the toolkit's Startup Options module
   - the Register-SerialStartupTask/Disable-SerialStartupTask/
@@ -49,6 +57,45 @@ function Test-IsAdmin {
 }
 
 $script:IGPRegistryBaseKey = "HKLM:\SOFTWARE\Indoor Golf Partner\IGP"
+
+# $PSScriptRoot here is Modules\Setup, so the toolkit root is two levels up.
+$script:ToolkitRoot          = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$script:WindowsSettingsPath  = Join-Path $script:ToolkitRoot 'Modules\Setup\WindowsSettings.ps1'
+
+function Invoke-InModuleScope {
+    param(
+        [Parameter(Mandatory)] [string]$ModulePath,
+        [Parameter(Mandatory)] [string]$FunctionName
+    )
+
+    if (-not (Test-Path -LiteralPath $ModulePath)) {
+        Write-Log "Module not found: $ModulePath" 'ERROR'
+        return $null
+    }
+
+    # Isolated scope so WindowsSettings.ps1's helpers (Write-Log, Test-IsAdmin, etc.)
+    # never collide with this module's own copies of the same names.
+    & {
+        param($Path, $Fn)
+        . $Path
+        if (Get-Command $Fn -ErrorAction SilentlyContinue) {
+            & $Fn
+        }
+    } $ModulePath $FunctionName
+}
+
+function Sync-BgInfoBrandingIfEnabled {
+    # If BGInfo Autostart is already turned on, switching reseller here would otherwise
+    # leave it silently showing the old brand's config/wallpaper until someone thinks to
+    # disable and re-enable that toggle. Re-running its Enable function re-copies the
+    # correct .bgi/.jpg for whatever Reseller now is and re-points the scheduled task -
+    # same logic Windows Settings' own "Enable" already runs, just triggered here too.
+    $existingTask = Invoke-InModuleScope -ModulePath $script:WindowsSettingsPath -FunctionName 'Get-ExistingBgInfoAutostartTask'
+    if (-not $existingTask) { return }
+
+    Write-Log "BGInfo Autostart is enabled - re-syncing its branding for the new Reseller value..."
+    Invoke-InModuleScope -ModulePath $script:WindowsSettingsPath -FunctionName 'Enable-BgInfoAutostart' | Out-Null
+}
 
 function Set-IGPRegistryInfo {
     param(
@@ -89,6 +136,7 @@ function Set-IGPRegistryInfo {
         }
 
         Write-Log "Registry information written."
+        Sync-BgInfoBrandingIfEnabled
     }
     catch {
         Write-Log "Failed to write registry info: $($_.Exception.Message)" 'ERROR'
