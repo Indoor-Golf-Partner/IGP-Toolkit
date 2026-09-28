@@ -35,8 +35,12 @@
   - Lists all physical network adapters and lets the user pick one, then
     applies everything from the Power Management and Advanced tabs of that
     adapter's Device Manager properties:
-    - Disables "Allow the computer to turn off this device to save power"
-      (root\wmi MSPower_DeviceEnable).
+    - Disables "Allow the computer to turn off this device to save power".
+      Tries Get/Disable-NetAdapterPowerManagement's AllowComputerToTurnOffDevice
+      property first (confirmed the authoritative source on hardware where
+      root\wmi MSPower_DeviceEnable has no entry for the NIC at all, e.g. a
+      Realtek PCIe 5GbE controller), falling back to the legacy WMI approach
+      only if the modern property is unavailable.
     - Disables "Allow this device to wake the computer" (powercfg
       /devicedisablewake - a generic PnP power-policy flag, not a NIC
       advanced property).
@@ -464,6 +468,35 @@ function Disable-NicPowerManagement {
     }
 }
 
+function Disable-NicAllowComputerToTurnOffDevice {
+    param([Parameter(Mandatory)] $Adapter)
+
+    # "Allow the computer to turn off this device to save power" for a NIC is not
+    # reliably exposed via root\wmi MSPower_DeviceEnable - confirmed on a Realtek
+    # PCIe 5GbE controller that simply has no entry there at all, despite the
+    # checkbox being present and interactive in Device Manager. The correct,
+    # NIC-specific mechanism is Get/Disable-NetAdapterPowerManagement's
+    # AllowComputerToTurnOffDevice property. Per Microsoft's own docs, this
+    # property has no individually-selectable switch on Disable-NetAdapter
+    # PowerManagement - "If no power parameters are specified then all power
+    # management features are disabled" - so it can only be toggled by calling
+    # the cmdlet with no specific switches at all (which also turns off
+    # ArpOffload/NSOffload/WakeOnPattern/etc., all fine to disable on a PC that
+    # should never let this adapter go into any power-saving state).
+    if (-not (Get-Command Disable-NetAdapterPowerManagement -ErrorAction SilentlyContinue)) {
+        Write-Log "Disable-NetAdapterPowerManagement not available on this system." 'WARN'
+        return
+    }
+
+    try {
+        Disable-NetAdapterPowerManagement -Name $Adapter.Name -NoRestart -ErrorAction Stop
+        Write-Log "Disabled 'Allow the computer to turn off this device to save power' for '$($Adapter.Name)' (and all other NIC power management features)."
+    }
+    catch {
+        Write-Log "Failed to disable NIC power management for '$($Adapter.Name)': $($_.Exception.Message)" 'WARN'
+    }
+}
+
 function Set-NicAdvancedPropertyBestEffort {
     param(
         [Parameter(Mandatory)] $Adapter,
@@ -643,6 +676,29 @@ function Test-NicWakeDisabled {
     }
 }
 
+function Test-NicAllowComputerToTurnOffDeviceDisabled {
+    param([Parameter(Mandatory)] $Adapter)
+
+    # AllowComputerToTurnOffDevice (via Get-NetAdapterPowerManagement) is the
+    # authoritative, NIC-specific source of truth - confirmed to report correctly
+    # even when the legacy MSPower_DeviceEnable WMI class has no entry for the
+    # device at all. Only fall back to that legacy check if the modern property
+    # is unavailable or doesn't report a clean Enabled/Disabled.
+    if (Get-Command Get-NetAdapterPowerManagement -ErrorAction SilentlyContinue) {
+        try {
+            $pm = Get-NetAdapterPowerManagement -Name $Adapter.Name -ErrorAction Stop
+            if ($pm.AllowComputerToTurnOffDevice -in @('Enabled', 'Disabled')) {
+                return [bool]($pm.AllowComputerToTurnOffDevice -eq 'Disabled')
+            }
+        }
+        catch {
+            # Fall through to the legacy check
+        }
+    }
+
+    return Test-NicPowerManagementDisabled -Adapter $Adapter
+}
+
 function Disable-NicWakeOnMagicPacket {
     param([Parameter(Mandatory)] $Adapter)
 
@@ -682,6 +738,7 @@ function Invoke-NetworkSettings {
     }
 
     Disable-NicPowerManagement -Adapter $adapter
+    Disable-NicAllowComputerToTurnOffDevice -Adapter $adapter
     Disable-NicWakeCapability -Adapter $adapter
     Disable-NicWakeOnMagicPacket -Adapter $adapter
     Set-NicSpeedDuplex1G -Adapter $adapter
@@ -730,7 +787,7 @@ function Test-NetworkSettingsApplied {
     $matching = @()
 
     foreach ($a in $adapters) {
-        $powerOk       = Test-NicPowerManagementDisabled -Adapter $a
+        $powerOk       = Test-NicAllowComputerToTurnOffDeviceDisabled -Adapter $a
         $wakeOk        = Test-NicWakeDisabled -Adapter $a
         $magicPacketOk = Test-NicWakeOnMagicPacketDisabled -Adapter $a
         $speedOk       = Test-NicSettingApplied -Adapter $a `
