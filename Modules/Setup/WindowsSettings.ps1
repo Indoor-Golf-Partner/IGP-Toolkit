@@ -468,7 +468,7 @@ function Set-NicAdvancedPropertyBestEffort {
     param(
         [Parameter(Mandatory)] $Adapter,
         [Parameter(Mandatory)] [string]$SettingLabel,
-        [Parameter(Mandatory)] [string[]]$RegistryKeywords,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]]$RegistryKeywords,
         [Parameter(Mandatory)] [string[]]$DisplayNameFallbacks,
         [string]$RegistryValue,
         [Parameter(Mandatory)] [string[]]$DisplayValueCandidates,
@@ -702,7 +702,7 @@ function Test-NicPowerManagementDisabled {
 function Test-NicSettingApplied {
     param(
         [Parameter(Mandatory)] $Adapter,
-        [Parameter(Mandatory)] [string[]]$RegistryKeywords,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]]$RegistryKeywords,
         [Parameter(Mandatory)] [string[]]$DisplayNameFallbacks,
         [Parameter(Mandatory)] [string]$ValidValuePattern
     )
