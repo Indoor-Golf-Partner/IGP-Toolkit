@@ -74,6 +74,18 @@ function Invoke-Module {
 # alphabetical, after these).
 $CategoryOrder = @('Repair', 'Operation', 'Setup', 'Toolkit')
 
+# Fixed display order for items within a category, by Title (anything not listed
+# falls back to alphabetical, after these). Only Setup needs one so far; other
+# categories just fall through to alphabetical unaffected.
+$TitleOrder = @(
+    'Machine Identity',
+    'Reseller Setup',
+    'Windows Settings',
+    'Debloater',
+    'Startup Options',
+    'Overview'
+)
+
 # Manual registry
 $ModuleRegistry = @(
     @{
@@ -153,9 +165,14 @@ while ($true) {
     }
     $orderedCategories = $items.Category | Select-Object -Unique | Sort-Object $categoryRank, { $_ }
 
+    $titleRank = {
+        $idx = $TitleOrder.IndexOf($_.Title)
+        if ($idx -ge 0) { $idx } else { [int]::MaxValue }
+    }
+
     foreach ($catName in $orderedCategories) {
         Write-Host "--- $catName ---"
-        $group = $items | Where-Object { $_.Category -eq $catName } | Sort-Object Title
+        $group = $items | Where-Object { $_.Category -eq $catName } | Sort-Object $titleRank, Title
         foreach ($it in $group) {
             Write-Host ("{0,2}) {1}" -f $i, $it.Title)
             $map["$i"] = $it.FullPath
