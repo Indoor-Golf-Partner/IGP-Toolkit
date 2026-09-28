@@ -36,11 +36,16 @@
     applies everything from the Power Management and Advanced tabs of that
     adapter's Device Manager properties:
     - Disables "Allow the computer to turn off this device to save power".
-      Tries Get/Disable-NetAdapterPowerManagement's AllowComputerToTurnOffDevice
-      property first (confirmed the authoritative source on hardware where
-      root\wmi MSPower_DeviceEnable has no entry for the NIC at all, e.g. a
-      Realtek PCIe 5GbE controller), falling back to the legacy WMI approach
-      only if the modern property is unavailable.
+      Reads AllowComputerToTurnOffDevice via Get-NetAdapterPowerManagement
+      first (confirmed the authoritative source on hardware where root\wmi
+      MSPower_DeviceEnable has no entry for the NIC at all, e.g. a Realtek
+      PCIe 5GbE controller), falling back to the legacy WMI approach only
+      if the modern property is unavailable. Live testing showed this
+      property is not reachable through any Set-/Disable-
+      NetAdapterPowerManagement switch (neither -SelectiveSuspend nor the
+      "no switches" form actually changed it) - it has to be mutated
+      directly on the CIM object and applied via Set-CimInstance, the same
+      pattern already used for USB devices.
     - Disables "Allow this device to wake the computer" (powercfg
       /devicedisablewake - a generic PnP power-policy flag, not a NIC
       advanced property).
@@ -474,26 +479,35 @@ function Disable-NicAllowComputerToTurnOffDevice {
     # "Allow the computer to turn off this device to save power" for a NIC is not
     # reliably exposed via root\wmi MSPower_DeviceEnable - confirmed on a Realtek
     # PCIe 5GbE controller that simply has no entry there at all, despite the
-    # checkbox being present and interactive in Device Manager. The correct,
-    # NIC-specific mechanism is Get/Disable-NetAdapterPowerManagement's
-    # AllowComputerToTurnOffDevice property. Per Microsoft's own docs, this
-    # property has no individually-selectable switch on Disable-NetAdapter
-    # PowerManagement - "If no power parameters are specified then all power
-    # management features are disabled" - so it can only be toggled by calling
-    # the cmdlet with no specific switches at all (which also turns off
-    # ArpOffload/NSOffload/WakeOnPattern/etc., all fine to disable on a PC that
-    # should never let this adapter go into any power-saving state).
-    if (-not (Get-Command Disable-NetAdapterPowerManagement -ErrorAction SilentlyContinue)) {
-        Write-Log "Disable-NetAdapterPowerManagement not available on this system." 'WARN'
+    # checkbox being present and interactive in Device Manager.
+    #
+    # AllowComputerToTurnOffDevice (from Get-NetAdapterPowerManagement) is the
+    # correct, NIC-specific property - but live testing showed it's NOT reachable
+    # through any Set-/Disable-NetAdapterPowerManagement switch (neither
+    # -SelectiveSuspend nor the "no switches = disable everything" form actually
+    # changed it, and SelectiveSuspend itself didn't change either). The only
+    # thing that worked was mutating the CIM object's property directly and
+    # calling Set-CimInstance - the same pattern already used for USB devices
+    # via MSPower_DeviceEnable - which took effect immediately, no restart needed.
+    if (-not (Get-Command Get-NetAdapterPowerManagement -ErrorAction SilentlyContinue)) {
+        Write-Log "Get-NetAdapterPowerManagement not available on this system." 'WARN'
         return
     }
 
     try {
-        Disable-NetAdapterPowerManagement -Name $Adapter.Name -NoRestart -ErrorAction Stop
-        Write-Log "Disabled 'Allow the computer to turn off this device to save power' for '$($Adapter.Name)' (and all other NIC power management features)."
+        $pm = Get-NetAdapterPowerManagement -Name $Adapter.Name -ErrorAction Stop
+
+        if ($pm.AllowComputerToTurnOffDevice -eq 'Disabled') {
+            Write-Log "'Allow the computer to turn off this device to save power' already disabled for '$($Adapter.Name)'."
+            return
+        }
+
+        $pm.AllowComputerToTurnOffDevice = 'Disabled'
+        Set-CimInstance -InputObject $pm -ErrorAction Stop
+        Write-Log "Disabled 'Allow the computer to turn off this device to save power' for '$($Adapter.Name)'."
     }
     catch {
-        Write-Log "Failed to disable NIC power management for '$($Adapter.Name)': $($_.Exception.Message)" 'WARN'
+        Write-Log "Failed to disable NIC power-off setting for '$($Adapter.Name)': $($_.Exception.Message)" 'WARN'
     }
 }
 
