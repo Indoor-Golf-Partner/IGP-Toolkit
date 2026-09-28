@@ -32,11 +32,22 @@
     programs launch immediately at logon.
 
   Network Settings:
-  - Lists all physical network adapters and lets the user pick one, then:
-    - Disables "Allow the computer to turn off this device to save
-      power" for that adapter.
+  - Lists all physical network adapters and lets the user pick one, then
+    applies everything from the Power Management and Advanced tabs of that
+    adapter's Device Manager properties:
+    - Disables "Allow the computer to turn off this device to save power"
+      (root\wmi MSPower_DeviceEnable).
+    - Disables "Allow this device to wake the computer" (powercfg
+      /devicedisablewake - a generic PnP power-policy flag, not a NIC
+      advanced property).
+    - Disables "Only allow a magic packet to wake the computer"
+      (Set-NetAdapterPowerManagement -WakeOnMagicPacket Disabled).
     - Sets Speed & Duplex to 1.0 Gbps Full Duplex.
     - Sets Jumbo Frame/Jumbo Packet to 9014 bytes (9k).
+    - Disables Energy Efficient Ethernet (*EEE).
+    - Disables Power Saving Mode where the driver exposes it separately
+      from EEE (best-effort; not required for the "Confirmed" status
+      since many drivers don't expose it as its own property).
 
   Apply/Validate NVIDIA Settings:
   - Downloads NVIDIA Profile Inspector (github.com/Orbmu2k/
@@ -80,11 +91,19 @@
   performance" scheme (8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c) instead of
   matching its display name, since that name is localized on non-English
   Windows installs.
-  Network adapter advanced properties (Speed & Duplex, Jumbo Frame) are
+  Network adapter advanced properties (Speed & Duplex, Jumbo Frame, EEE) are
   matched by their driver-defined RegistryKeyword (e.g. "*SpeedDuplex",
-  "*JumboPacket") rather than DisplayName, since DisplayName is localized
-  in Device Manager depending on Windows display language while
-  RegistryKeyword is not.
+  "*JumboPacket", "*EEE" - the last two confirmed against Microsoft's
+  "Standardized INF Keywords for Power Management") rather than DisplayName,
+  since DisplayName is localized in Device Manager depending on Windows
+  display language while RegistryKeyword is not. Power Saving Mode has no
+  standardized keyword (matched by DisplayName only). "Allow this device to
+  wake the computer" and "Only allow a magic packet to wake the computer"
+  are NOT NIC advanced properties at all - the former is a generic PnP
+  power-policy flag (powercfg /devicedisablewake, matched by the adapter's
+  InterfaceDescription/hardware friendly name, not its connection alias),
+  the latter is controlled via Set-NetAdapterPowerManagement's
+  -WakeOnMagicPacket parameter.
   .nip files are XmlSerializer output of NVIDIA Profile Inspector's
   "Profiles : List<Profile>" class - parsed directly as XML rather than
   via the tool itself, since it has no query/compare command-line option.
@@ -524,6 +543,20 @@ $script:JumboFrameRegistryValue        = '9014'
 $script:JumboFrameValidPattern         = '9014|9\s*k'
 $script:JumboFrameDisplayCandidates    = @('9014 Bytes','9014','9 KB','9KB MTU','9k','9K')
 
+# *EEE is a standardized NDIS INF keyword (Microsoft: "Standardized INF Keywords for
+# Power Management"), so it's matched by keyword first like Speed/Duplex and Jumbo Frame.
+$script:EEERegistryKeywords     = @('*EEE')
+$script:EEEDisplayNameFallback  = @('Energy Efficient Ethernet','Energy-Efficient Ethernet','EEE','Green Ethernet')
+$script:EEEValidPattern         = '(?i)disab|off'
+$script:EEEDisplayCandidates    = @('Disabled','Off')
+
+# "Power Saving Mode" has no standardized keyword - on some drivers it's just another
+# display name for *EEE, on others a distinct vendor-specific property, so this is
+# matched purely by DisplayName (no RegistryKeywords to try first).
+$script:PowerSavingModeDisplayNameFallback = @('Power Saving Mode','PowerSaveMode','Power Saving')
+$script:PowerSavingModeValidPattern        = '(?i)disab|off'
+$script:PowerSavingModeDisplayCandidates   = @('Disabled','Off')
+
 function Set-NicSpeedDuplex1G {
     param([Parameter(Mandatory)] $Adapter)
 
@@ -549,6 +582,98 @@ function Set-NicJumboFrame9014 {
         -DisplayValueCandidates $script:JumboFrameDisplayCandidates
 }
 
+function Set-NicEnergyEfficientEthernetOff {
+    param([Parameter(Mandatory)] $Adapter)
+
+    Set-NicAdvancedPropertyBestEffort -Adapter $Adapter `
+        -SettingLabel 'Energy Efficient Ethernet' `
+        -RegistryKeywords $script:EEERegistryKeywords `
+        -DisplayNameFallbacks $script:EEEDisplayNameFallback `
+        -ValidValuePattern $script:EEEValidPattern `
+        -DisplayValueCandidates $script:EEEDisplayCandidates
+}
+
+function Set-NicPowerSavingModeOff {
+    param([Parameter(Mandatory)] $Adapter)
+
+    Set-NicAdvancedPropertyBestEffort -Adapter $Adapter `
+        -SettingLabel 'Power Saving Mode' `
+        -RegistryKeywords @() `
+        -DisplayNameFallbacks $script:PowerSavingModeDisplayNameFallback `
+        -ValidValuePattern $script:PowerSavingModeValidPattern `
+        -DisplayValueCandidates $script:PowerSavingModeDisplayCandidates
+}
+
+function Get-NicWakeDeviceName {
+    param([Parameter(Mandatory)] $Adapter)
+
+    if ($Adapter.InterfaceDescription) { return $Adapter.InterfaceDescription }
+    return $Adapter.Name
+}
+
+function Disable-NicWakeCapability {
+    param([Parameter(Mandatory)] $Adapter)
+
+    # "Allow this device to wake the computer" is a generic PnP power-policy flag (not
+    # NIC-specific), controlled via powercfg rather than any NetAdapter cmdlet. powercfg
+    # matches devices by their hardware friendly name (InterfaceDescription), not the
+    # connection alias (Name) - e.g. "Intel(R) Ethernet Connection (7) I219-V".
+    $deviceName = Get-NicWakeDeviceName -Adapter $Adapter
+
+    try {
+        powercfg /devicedisablewake "$deviceName" | Out-Null
+        Write-Log "Disabled 'Allow this device to wake the computer' for '$deviceName'."
+    }
+    catch {
+        Write-Log "Failed to disable wake capability for '$deviceName': $($_.Exception.Message)" 'WARN'
+    }
+}
+
+function Test-NicWakeDisabled {
+    param([Parameter(Mandatory)] $Adapter)
+
+    $deviceName = Get-NicWakeDeviceName -Adapter $Adapter
+
+    try {
+        $wakeArmed = powercfg /devicequery wake_armed 2>$null
+        return -not [bool]($wakeArmed -match [regex]::Escape($deviceName))
+    }
+    catch {
+        return $false
+    }
+}
+
+function Disable-NicWakeOnMagicPacket {
+    param([Parameter(Mandatory)] $Adapter)
+
+    if (-not (Get-Command Set-NetAdapterPowerManagement -ErrorAction SilentlyContinue)) {
+        Write-Log "Set-NetAdapterPowerManagement not available on this system." 'WARN'
+        return
+    }
+
+    try {
+        Set-NetAdapterPowerManagement -Name $Adapter.Name -WakeOnMagicPacket Disabled -NoRestart -ErrorAction Stop
+        Write-Log "'Only allow a magic packet to wake the computer' disabled for '$($Adapter.Name)'."
+    }
+    catch {
+        Write-Log "Failed to disable Wake on Magic Packet for '$($Adapter.Name)': $($_.Exception.Message)" 'WARN'
+    }
+}
+
+function Test-NicWakeOnMagicPacketDisabled {
+    param([Parameter(Mandatory)] $Adapter)
+
+    if (-not (Get-Command Get-NetAdapterPowerManagement -ErrorAction SilentlyContinue)) { return $false }
+
+    try {
+        $pm = Get-NetAdapterPowerManagement -Name $Adapter.Name -ErrorAction Stop
+        return [bool]($pm.WakeOnMagicPacket -eq 'Disabled')
+    }
+    catch {
+        return $false
+    }
+}
+
 function Invoke-NetworkSettings {
     $adapter = Get-NetworkAdapterChoice
     if (-not $adapter) {
@@ -557,8 +682,12 @@ function Invoke-NetworkSettings {
     }
 
     Disable-NicPowerManagement -Adapter $adapter
+    Disable-NicWakeCapability -Adapter $adapter
+    Disable-NicWakeOnMagicPacket -Adapter $adapter
     Set-NicSpeedDuplex1G -Adapter $adapter
     Set-NicJumboFrame9014 -Adapter $adapter
+    Set-NicEnergyEfficientEthernetOff -Adapter $adapter
+    Set-NicPowerSavingModeOff -Adapter $adapter
 }
 
 function Test-NicPowerManagementDisabled {
@@ -593,12 +722,18 @@ function Test-NicSettingApplied {
 }
 
 function Test-NetworkSettingsApplied {
+    # Power Saving Mode is deliberately not part of this gate: it has no standardized
+    # keyword, and on many drivers it doesn't exist as a separate property at all (see
+    # Set-NicPowerSavingModeOff), so requiring it would make Confirmed unreachable on
+    # those systems even after everything realistically achievable has been applied.
     $adapters = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue)
     $matching = @()
 
     foreach ($a in $adapters) {
-        $powerOk = Test-NicPowerManagementDisabled -Adapter $a
-        $speedOk = Test-NicSettingApplied -Adapter $a `
+        $powerOk       = Test-NicPowerManagementDisabled -Adapter $a
+        $wakeOk        = Test-NicWakeDisabled -Adapter $a
+        $magicPacketOk = Test-NicWakeOnMagicPacketDisabled -Adapter $a
+        $speedOk       = Test-NicSettingApplied -Adapter $a `
             -RegistryKeywords $script:SpeedDuplexRegistryKeywords `
             -DisplayNameFallbacks $script:SpeedDuplexDisplayNameFallback `
             -ValidValuePattern $script:SpeedDuplexValidPattern
@@ -606,8 +741,12 @@ function Test-NetworkSettingsApplied {
             -RegistryKeywords $script:JumboFrameRegistryKeywords `
             -DisplayNameFallbacks $script:JumboFrameDisplayNameFallback `
             -ValidValuePattern $script:JumboFrameValidPattern
+        $eeeOk = Test-NicSettingApplied -Adapter $a `
+            -RegistryKeywords $script:EEERegistryKeywords `
+            -DisplayNameFallbacks $script:EEEDisplayNameFallback `
+            -ValidValuePattern $script:EEEValidPattern
 
-        if ($powerOk -and $speedOk -and $jumboOk) {
+        if ($powerOk -and $wakeOk -and $magicPacketOk -and $speedOk -and $jumboOk -and $eeeOk) {
             $matching += $a.Name
         }
     }
