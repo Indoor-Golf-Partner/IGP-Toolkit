@@ -400,27 +400,51 @@ function Wait-DiskRaw {
     throw "Disk $DiskNumber still doesn't report as RAW (uninitialized) $TimeoutSeconds seconds after diskpart cleaned it - PowerShell's Storage cmdlets may be seeing stale cached state."
 }
 
+function Clear-DiskGptBackupHeader {
+    # GPT keeps a backup copy of its header and partition entry array in the last few
+    # sectors of the disk, specifically so a damaged primary (at the front) can be
+    # repaired from it - that's by design, not a bug. Plain diskpart "clean" only wipes
+    # the front (protective MBR + primary GPT header/table), so Windows can still detect
+    # a valid backup at the end and keep reporting the disk as GPT-initialized, which is
+    # exactly what was confirmed on real hardware (clean succeeded, but PartitionStyle
+    # never became RAW). "clean all" fixes this by zeroing the entire drive, but that's
+    # far more than is actually needed and can take several minutes on a large USB drive
+    # - a customer-facing tool sitting there for minutes looks broken. Zeroing just the
+    # last 1 MB directly (the backup GPT header/table lives in a small fraction of that)
+    # targets exactly the leftover data that matters and takes a fraction of a second.
+    param([Parameter(Mandatory)] [int]$DiskNumber, [Parameter(Mandatory)] [int64]$DiskSizeBytes)
+
+    $chunkSize = [Math]::Min(1MB, $DiskSizeBytes)
+    $zeros = New-Object byte[] $chunkSize
+
+    $path = "\\.\PhysicalDrive$DiskNumber"
+    $stream = New-Object System.IO.FileStream($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+    try {
+        $stream.Seek($DiskSizeBytes - $chunkSize, [System.IO.SeekOrigin]::Begin) | Out-Null
+        $stream.Write($zeros, 0, $zeros.Length)
+        $stream.Flush($true)
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
 function Initialize-RestoreUsbPartitions {
     # diskpart.exe's own CLI refuses "create partition efi"/format on media flagged
     # removable ("The operation is not supported on removable media" - confirmed on real
     # hardware), even though the same disk fully supports a GPT ESP partition when
-    # created the normal way. So diskpart is used ONLY for wiping the disk; everything
-    # else goes back to the native PowerShell Storage cmdlets, which got past this exact
-    # step cleanly before diskpart was involved at all.
-    #
-    # Plain "clean" only wipes the front of the disk and can leave the backup GPT header
-    # at the very end intact - confirmed on real hardware: the disk still reported as
-    # GPT-initialized (never RAW) after a plain clean, even with Update-Disk/polling
-    # ruling out a caching delay. "clean all" zeroes every sector, guaranteeing no
-    # leftover GPT signature survives - much slower (writes to the whole drive, not just
-    # the first few sectors) but the only way that's actually reliable here.
+    # created the normal way. So diskpart is used ONLY for wiping the front of the disk;
+    # everything else goes back to the native PowerShell Storage cmdlets, which got past
+    # this exact step cleanly before diskpart was involved at all.
     param([Parameter(Mandatory)] $Disk)
 
-    Write-Log "Wiping disk $($Disk.Number) via diskpart (clean all - this writes zeros to the entire drive, so it can take several minutes)..."
+    Write-Log "Wiping disk $($Disk.Number)..."
     Invoke-DiskpartScript -Commands @(
         "select disk $($Disk.Number)",
-        "clean all"
+        "clean"
     ) | Out-Null
+
+    Clear-DiskGptBackupHeader -DiskNumber $Disk.Number -DiskSizeBytes $Disk.Size
 
     Wait-DiskRaw -DiskNumber $Disk.Number
     Initialize-Disk -Number $Disk.Number -PartitionStyle GPT -ErrorAction Stop

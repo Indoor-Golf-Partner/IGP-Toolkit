@@ -4,7 +4,7 @@ if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
     throw "Cannot determine script path. Run this as a file: powershell -File <path>\Run-IGPToolkit.ps1"
 }
 $ToolkitRoot = Split-Path -Parent $ScriptPath
-$ToolkitVersion = '2.0.10'
+$ToolkitVersion = '2.0.11'
 
 function Show-ToolkitBanner {
     $title = "IGP TOOLKIT"
