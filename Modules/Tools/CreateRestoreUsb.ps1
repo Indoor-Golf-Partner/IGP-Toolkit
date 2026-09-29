@@ -12,21 +12,29 @@
        host-key prompt, no StrictHostKeyChecking=no either).
     4) List the available baseline images under /deploy/current/ on the
        server and let you pick one.
-    5) Wipe and partition the USB as GPT:
-         - Partition 1: 1 GB, EFI System Partition type, FAT32, label
-           IGP-RESTORE.
+    5) Wipe and partition the USB as MBR:
+         - Partition 1: 1 GB, FAT32, marked active, label IGP-RESTORE.
          - Partition 2: rest of the drive, NTFS, label IMAGES.
     6) Download /deploy/igprestore/igprestore.zip (small) to a local temp
        file and extract it onto the IGP-RESTORE partition.
     7) Download the chosen image folder straight onto the IMAGES partition
        (no local staging - these are large).
 
-  Why an EFI System Partition and not a syslinux/MBR install: a GPT
-  partition flagged with the ESP type and formatted FAT32 is bootable to
-  UEFI firmware directly (it loads \EFI\BOOT\BOOTX64.EFI) - no boot-sector
-  or bootloader-install step is needed, which matches how these sticks are
-  already built by hand (partition, format, copy files - nothing else).
-  This only works on UEFI-capable target PCs.
+  Why MBR + an active FAT32 partition and not GPT + ESP: this was
+  originally GPT+ESP (the modern, spec-correct way to make UEFI firmware
+  load \EFI\BOOT\BOOTX64.EFI with no boot-sector/bootloader-install step
+  needed). That had to be abandoned after extensive real-hardware
+  debugging: on some machines Windows' Virtual Disk Service gets stuck
+  refusing to convert a disk to GPT at all ("The specified disk is not
+  convertible"), reproducibly, across multiple different drives, with no
+  GPO or AV involved - a VDS/storage-stack issue, not something a retry or
+  a different disk fixes. MBR was never observed to hit this. A FAT32
+  partition with the active flag set is the long-standing fallback UEFI
+  firmware supports for booting MBR media (no ESP type byte needed - see
+  Initialize-RestoreUsbPartitions), at the cost of being a less strictly
+  standardized path than GPT+ESP. This only works on UEFI-capable target
+  PCs whose firmware honors that fallback, which is common but not
+  universal - worth a real boot test on the actual target hardware.
 
   Both SFTP downloads run in the background while this script polls the
   destination's on-disk size against the size reported by the server, to
@@ -74,9 +82,6 @@ $script:RemoteRestoreKit = '/deploy/igprestore/igprestore.zip'
 # and SYSTEM's display names are localized on non-English Windows installs.
 $script:SidSystem         = '*S-1-5-18'
 $script:SidAdministrators = '*S-1-5-32-544'
-
-# GPT partition type GUID for an EFI System Partition.
-$script:EspGptType = '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}'
 
 $script:MinUsbSizeBytes = 50GB
 
@@ -380,24 +385,30 @@ function Invoke-DiskpartScript {
     }
 }
 
-function Wait-DiskRaw {
-    # After an external diskpart.exe process cleans the disk, PowerShell's Storage
-    # cmdlets can still report a stale cached view of it for a moment - confirmed on
-    # real hardware: Initialize-Disk immediately after diskpart's clean failed with
-    # "The disk has already been initialized" even though diskpart just cleaned it.
-    # Update-Disk forces a refresh; poll until the cache actually catches up rather than
-    # trusting a fixed delay.
-    param([Parameter(Mandatory)] [int]$DiskNumber, [int]$TimeoutSeconds = 15)
+function Initialize-DiskAsMbr {
+    # Confirmed on real hardware: after diskpart cleans a disk, Get-Disk can report
+    # PartitionStyle MBR (with zero partitions on it - verified with Get-Partition, and
+    # with the disk's own raw bytes independently verified as genuinely zeroed) instead of
+    # RAW. That's exactly the style this function wants anyway, so it's treated as already
+    # done rather than forcing a conversion. Initialize-Disk is still tried as the primary
+    # path (handles disks that do come back RAW); the post-hoc check is a safety net for
+    # the "already initialized" case landing anyway despite the pre-check.
+    param([Parameter(Mandatory)] [int]$DiskNumber)
 
-    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    while ((Get-Date) -lt $deadline) {
-        Update-Disk -Number $DiskNumber -ErrorAction SilentlyContinue
-        $disk = Get-Disk -Number $DiskNumber -ErrorAction SilentlyContinue
-        if ($disk -and $disk.PartitionStyle -eq 'RAW') { return }
-        Start-Sleep -Seconds 1
+    $disk = Get-Disk -Number $DiskNumber -ErrorAction Stop
+    if ($disk.PartitionStyle -eq 'MBR') { return }
+
+    try {
+        Initialize-Disk -Number $DiskNumber -PartitionStyle MBR -ErrorAction Stop
     }
-
-    throw "Disk $DiskNumber still doesn't report as RAW (uninitialized) $TimeoutSeconds seconds after diskpart cleaned it - PowerShell's Storage cmdlets may be seeing stale cached state."
+    catch {
+        $disk = Get-Disk -Number $DiskNumber -ErrorAction SilentlyContinue
+        if ($disk -and $disk.PartitionStyle -eq 'MBR') {
+            Write-Log "Initialize-Disk reported '$($_.Exception.Message)', but disk $DiskNumber already shows as MBR - continuing." 'WARN'
+            return
+        }
+        throw
+    }
 }
 
 function Clear-DiskGptBackupHeader {
@@ -430,12 +441,18 @@ function Clear-DiskGptBackupHeader {
 }
 
 function Initialize-RestoreUsbPartitions {
-    # diskpart.exe's own CLI refuses "create partition efi"/format on media flagged
-    # removable ("The operation is not supported on removable media" - confirmed on real
-    # hardware), even though the same disk fully supports a GPT ESP partition when
-    # created the normal way. So diskpart is used ONLY for wiping the front of the disk;
-    # everything else goes back to the native PowerShell Storage cmdlets, which got past
-    # this exact step cleanly before diskpart was involved at all.
+    # MBR, not GPT: see the module's .DESCRIPTION header for why. Partitions are created
+    # via the native PowerShell Storage cmdlets rather than diskpart - diskpart.exe's own
+    # CLI refuses "create partition"/format on media flagged removable ("The operation is
+    # not supported on removable media" - confirmed on real hardware), even though the
+    # same disk fully supports it when created the normal way. So diskpart is used ONLY
+    # for wiping the disk; everything else goes back to the PowerShell cmdlets, which got
+    # past this exact step cleanly before diskpart was involved at all.
+    #
+    # There's no MBR partition type for "EFI System Partition" exposed via New-Partition's
+    # -MbrType (confirmed against the live enum: FAT12/FAT16/Extended/Huge/IFS/FAT32 only -
+    # no ESP-equivalent). The long-standing fallback UEFI firmware supports for MBR media
+    # instead is a FAT32 partition with the active flag set, which -IsActive provides.
     param([Parameter(Mandatory)] $Disk)
 
     Write-Log "Wiping disk $($Disk.Number)..."
@@ -446,15 +463,14 @@ function Initialize-RestoreUsbPartitions {
 
     Clear-DiskGptBackupHeader -DiskNumber $Disk.Number -DiskSizeBytes $Disk.Size
 
-    Wait-DiskRaw -DiskNumber $Disk.Number
-    Initialize-Disk -Number $Disk.Number -PartitionStyle GPT -ErrorAction Stop
+    Initialize-DiskAsMbr -DiskNumber $Disk.Number
 
-    Write-Log "Creating boot partition (1 GB, FAT32, EFI System Partition)..."
-    $bootPartition = New-Partition -DiskNumber $Disk.Number -Size 1GB -GptType $script:EspGptType -AssignDriveLetter -ErrorAction Stop
+    Write-Log "Creating boot partition (1 GB, FAT32, active)..."
+    $bootPartition = New-Partition -DiskNumber $Disk.Number -Size 1GB -MbrType FAT32 -IsActive -AssignDriveLetter -ErrorAction Stop
     Format-Volume -Partition $bootPartition -FileSystem FAT32 -NewFileSystemLabel 'IGP-RESTORE' -Confirm:$false -ErrorAction Stop | Out-Null
 
     Write-Log "Creating image partition (remaining space, NTFS)..."
-    $imagePartition = New-Partition -DiskNumber $Disk.Number -UseMaximumSize -AssignDriveLetter -ErrorAction Stop
+    $imagePartition = New-Partition -DiskNumber $Disk.Number -MbrType IFS -UseMaximumSize -AssignDriveLetter -ErrorAction Stop
     Format-Volume -Partition $imagePartition -FileSystem NTFS -NewFileSystemLabel 'IMAGES' -Confirm:$false -ErrorAction Stop | Out-Null
 
     $bootPartition = Get-Partition -DiskNumber $Disk.Number -PartitionNumber $bootPartition.PartitionNumber
