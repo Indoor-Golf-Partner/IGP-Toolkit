@@ -381,40 +381,34 @@ function Invoke-DiskpartScript {
 }
 
 function Initialize-RestoreUsbPartitions {
-    # Everything destructive/creative happens inside one diskpart script rather than
-    # mixing diskpart for the wipe with the PowerShell Storage cmdlets for the rest -
-    # doing the wipe via diskpart and then immediately reading/creating partitions via
-    # Get-Disk/Initialize-Disk/New-Partition hit a "disk has already been initialized"
-    # error on real hardware, twice, most likely a stale-state race between the two
-    # different tools talking to the same underlying storage stack. Keeping the whole
-    # sequence inside diskpart avoids that handoff entirely.
+    # diskpart.exe's own CLI refuses "create partition efi"/format on media flagged
+    # removable ("The operation is not supported on removable media" - confirmed on real
+    # hardware), even though the same disk fully supports a GPT ESP partition when
+    # created the normal way. So diskpart is used ONLY for "clean" (which genuinely
+    # resets the disk to RAW - Clear-Disk alone doesn't reliably do that, confirmed
+    # separately on real hardware); everything else goes back to the native PowerShell
+    # Storage cmdlets, which got past this exact step cleanly before diskpart was
+    # involved at all.
     param([Parameter(Mandatory)] $Disk)
 
-    Write-Log "Partitioning disk $($Disk.Number) via diskpart (wipe, GPT, boot + image partitions)..."
+    Write-Log "Wiping disk $($Disk.Number) via diskpart..."
     Invoke-DiskpartScript -Commands @(
         "select disk $($Disk.Number)",
-        "clean",
-        "convert gpt",
-        "create partition efi size=1024",
-        "format fs=fat32 quick label=`"IGP-RESTORE`"",
-        "assign",
-        "create partition primary",
-        "format fs=ntfs quick label=`"IMAGES`"",
-        "assign"
+        "clean"
     ) | Out-Null
 
-    # Force Windows to re-read the disk's layout rather than trust a cached view from
-    # before diskpart ran, then give it a moment to finish assigning drive letters.
-    Update-Disk -Number $Disk.Number -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
+    Initialize-Disk -Number $Disk.Number -PartitionStyle GPT -ErrorAction Stop
 
-    $partitions = @(Get-Partition -DiskNumber $Disk.Number -ErrorAction Stop)
-    $bootPartition = $partitions | Where-Object { $_.GptType -eq $script:EspGptType } | Select-Object -First 1
-    $imagePartition = $partitions | Where-Object { $_.DriveLetter -and $_.PartitionNumber -ne $bootPartition.PartitionNumber } | Select-Object -First 1
+    Write-Log "Creating boot partition (1 GB, FAT32, EFI System Partition)..."
+    $bootPartition = New-Partition -DiskNumber $Disk.Number -Size 1GB -GptType $script:EspGptType -AssignDriveLetter -ErrorAction Stop
+    Format-Volume -Partition $bootPartition -FileSystem FAT32 -NewFileSystemLabel 'IGP-RESTORE' -Confirm:$false -ErrorAction Stop | Out-Null
 
-    if (-not $bootPartition -or -not $bootPartition.DriveLetter -or -not $imagePartition) {
-        throw "Could not identify the boot/image partitions with drive letters after partitioning disk $($Disk.Number)."
-    }
+    Write-Log "Creating image partition (remaining space, NTFS)..."
+    $imagePartition = New-Partition -DiskNumber $Disk.Number -UseMaximumSize -AssignDriveLetter -ErrorAction Stop
+    Format-Volume -Partition $imagePartition -FileSystem NTFS -NewFileSystemLabel 'IMAGES' -Confirm:$false -ErrorAction Stop | Out-Null
+
+    $bootPartition = Get-Partition -DiskNumber $Disk.Number -PartitionNumber $bootPartition.PartitionNumber
+    $imagePartition = Get-Partition -DiskNumber $Disk.Number -PartitionNumber $imagePartition.PartitionNumber
 
     return [pscustomobject]@{
         BootDriveLetter  = $bootPartition.DriveLetter
