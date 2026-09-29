@@ -66,14 +66,18 @@
   - Apply runs it with -silentImport against resources\nvidia\igp.nip
     (shipped in the toolkit) to set the NVIDIA Control Panel 3D settings
     normally configured by hand (Low Latency: Ultra, Power Management
-    Mode: Prefer Normal Performance, Texture Filtering Quality, OpenGL
-    Rendering GPU, PhysX Processor). Assumes exactly one NVIDIA GPU per
-    machine, since the GPU-selection settings are stored by slot rather
-    than by model name.
+    Mode: Adaptive, Texture Filtering Quality: Performance). OpenGL
+    Rendering GPU and PhysX Processor (both GPU-selection dropdowns that
+    TrackMan requires explicitly set, even though every IGP machine has
+    only one NVIDIA GPU) aren't stored in the per-profile driver settings
+    .nip files carry at all, so they can't be scripted - Apply prints a
+    reminder with the exact NVIDIA Control Panel steps for those two
+    afterwards instead.
   - Validate runs it with -exportCustomized to dump the machine's current
     customized settings, then compares each setting in igp.nip's "Base
     Profile" against that dump and reports any that are missing or don't
-    match - without changing anything.
+    match - without changing anything. (OpenGL Rendering GPU/PhysX
+    Processor are excluded from this comparison for the same reason.)
 
   TrackMan Autostart and BGInfo Autostart (both Scheduled Tasks, At Logon
   for any interactively logged-on user) are enabled/disabled from the
@@ -1166,6 +1170,20 @@ function Install-NvidiaProfileInspectorIfMissing {
     }
 }
 
+function Show-NvidiaManualStepsReminder {
+    # OpenGL Rendering GPU and PhysX Processor aren't part of the per-profile driver
+    # settings that .nip files carry, so igp.nip can't set them - but TrackMan requires
+    # both to be explicitly set even though there's only one NVIDIA GPU to pick.
+    Write-Host ""
+    Write-Host "TrackMan also requires two settings NVIDIA doesn't store per-profile -" -ForegroundColor Yellow
+    Write-Host "igp.nip can't set these, so set them by hand in NVIDIA Control Panel:" -ForegroundColor Yellow
+    Write-Host "  3D Settings > Manage 3D Settings > Global Settings > OpenGL Rendering GPU" -ForegroundColor Yellow
+    Write-Host "    -> select this machine's NVIDIA GPU" -ForegroundColor Yellow
+    Write-Host "  3D Settings > Configure Surround, PhysX > PhysX Processor" -ForegroundColor Yellow
+    Write-Host "    -> select this machine's NVIDIA GPU" -ForegroundColor Yellow
+    Write-Host ""
+}
+
 function Set-NvidiaGlobalProfile {
     if (-not (Install-NvidiaProfileInspectorIfMissing)) { return }
 
@@ -1177,6 +1195,7 @@ function Set-NvidiaGlobalProfile {
     Write-Log "Applying NVIDIA global 3D settings from igp.nip..."
     Start-Process -FilePath $script:NvidiaExePath -ArgumentList "-silentImport `"$script:NvidiaNipPath`"" -Wait -WindowStyle Hidden
     Write-Log "NVIDIA settings applied."
+    Show-NvidiaManualStepsReminder
 }
 
 function Get-NipProfileSettings {
