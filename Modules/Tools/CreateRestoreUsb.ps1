@@ -7,7 +7,7 @@
   Walks through:
     1) Pick a USB drive (>= 50 GB, removable, never the boot/system disk).
     2) Warn that the drive will be completely wiped.
-    3) Connect over SFTP to deploy.igpartner.dk:2223 as sftp_user, using the
+    3) Connect over SFTP to deploy.igpartner.dk:2223 as sftpuser, using the
        igp_images private key and a shipped known_hosts file (no interactive
        host-key prompt, no StrictHostKeyChecking=no either).
     4) List the available baseline images under /deploy/Current/ on the
@@ -62,7 +62,7 @@ $script:ToolkitRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
 $script:SftpHost         = 'deploy.igpartner.dk'
 $script:SftpPort         = 2223
-$script:SftpUser         = 'sftp_user'
+$script:SftpUser         = 'sftpuser'
 $script:SshKeyDir        = 'C:\ProgramData\Indoor Golf Partner\ssh'
 $script:SshKeyPath       = Join-Path $script:SshKeyDir 'igp_images'
 $script:KnownHostsPath   = Join-Path $script:ToolkitRoot 'resources\ssh\known_hosts'
