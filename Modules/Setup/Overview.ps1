@@ -55,7 +55,8 @@ $script:OverviewModulePaths = @(
     'Modules\Setup\Reseller.ps1'
     'Modules\Setup\MachineIdentity.ps1'
     'Modules\Repair\TrackmanStorage.ps1'
-    'Modules\Toolkit\updatetoolkit.ps1'
+    'Modules\Tools\updatetoolkit.ps1'
+    'Modules\Tools\CreateRestoreUsb.ps1'
 )
 
 function Invoke-InModuleScope {

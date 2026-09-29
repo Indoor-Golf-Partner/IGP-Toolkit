@@ -123,7 +123,7 @@ $script:StartupToggles = @(
     }
     [pscustomobject]@{
         Title     = 'Auto-update Toolkit at Startup'
-        Path      = Join-Path $script:ToolkitRoot 'Modules\Toolkit\updatetoolkit.ps1'
+        Path      = Join-Path $script:ToolkitRoot 'Modules\Tools\updatetoolkit.ps1'
         StatusFn  = 'Get-ExistingTask'
         EnableFn  = 'Register-StartupTask'
         DisableFn = 'Disable-StartupTask'

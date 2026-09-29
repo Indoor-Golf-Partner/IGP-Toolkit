@@ -4,7 +4,7 @@ if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
     throw "Cannot determine script path. Run this as a file: powershell -File <path>\Run-IGPToolkit.ps1"
 }
 $ToolkitRoot = Split-Path -Parent $ScriptPath
-$ToolkitVersion = '2.0.0'
+$ToolkitVersion = '2.0.1'
 
 function Show-ToolkitBanner {
     $title = "IGP TOOLKIT"
@@ -97,7 +97,7 @@ function Invoke-Module {
 
 # Fixed display order for menu categories (anything not listed falls back to
 # alphabetical, after these).
-$CategoryOrder = @('Repair', 'Operation', 'Setup', 'Toolkit')
+$CategoryOrder = @('Repair', 'Operation', 'Setup', 'Tools')
 
 # Fixed display order for items within a category, by Title (anything not listed
 # falls back to alphabetical, after these). Only Setup needs one so far; other
@@ -154,8 +154,12 @@ $ModuleRegistry = @(
         Title = "Overview"
     },
     @{
-        Path  = "Modules\Toolkit\updatetoolkit.ps1"
+        Path  = "Modules\Tools\updatetoolkit.ps1"
         Title = "Update IGP Toolkit"
+    },
+    @{
+        Path  = "Modules\Tools\CreateRestoreUsb.ps1"
+        Title = "Create Restore USB"
     }
 )
 
