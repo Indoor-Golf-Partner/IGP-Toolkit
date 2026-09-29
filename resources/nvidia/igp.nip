@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Profiles>
+<ArrayOfProfile>
   <Profile>
     <ProfileName>Base Profile</ProfileName>
     <Executeables />
@@ -25,4 +25,4 @@
     </Settings>
     <ExecutableFindFiles />
   </Profile>
-</Profiles>
+</ArrayOfProfile>
