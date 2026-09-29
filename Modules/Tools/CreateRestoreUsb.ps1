@@ -414,7 +414,7 @@ function Clear-DiskGptBackupHeader {
     # targets exactly the leftover data that matters and takes a fraction of a second.
     param([Parameter(Mandatory)] [int]$DiskNumber, [Parameter(Mandatory)] [int64]$DiskSizeBytes)
 
-    $chunkSize = [Math]::Min(1MB, $DiskSizeBytes)
+    $chunkSize = if ($DiskSizeBytes -lt 1MB) { $DiskSizeBytes } else { 1MB }
     $zeros = New-Object byte[] $chunkSize
 
     $path = "\\.\PhysicalDrive$DiskNumber"
