@@ -356,47 +356,65 @@ function Confirm-UsbWipe {
     return ($typed -ceq 'ERASE')
 }
 
-function Clear-DiskCompletely {
-    # Clear-Disk removes partitions/data but doesn't reliably reset PartitionStyle back
-    # to RAW - a disk that was already GPT-partitioned from a previous build can still
-    # report as "already initialized" afterward, which makes Initialize-Disk fail.
-    # diskpart's "clean" genuinely resets the disk to a blank/uninitialized state.
-    param([Parameter(Mandatory)] [int]$DiskNumber)
+function Invoke-DiskpartScript {
+    # diskpart.exe almost always exits 0 even when an internal command inside the script
+    # failed, so $LASTEXITCODE alone can't be trusted - the transcript itself has to be
+    # checked for diskpart's own error phrasing.
+    param([Parameter(Mandatory)] [string[]]$Commands)
 
-    $diskpartScript = [System.IO.Path]::GetTempFileName()
+    $scriptFile = [System.IO.Path]::GetTempFileName()
     try {
-        Set-Content -LiteralPath $diskpartScript -Value @(
-            "select disk $DiskNumber",
-            "clean"
-        ) -Encoding ascii
+        Set-Content -LiteralPath $scriptFile -Value $Commands -Encoding ascii
 
-        $output = & diskpart.exe /s $diskpartScript 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw "diskpart clean failed (exit code $LASTEXITCODE): $($output -join ' ')"
+        $output = & diskpart.exe /s $scriptFile 2>&1
+        $text = $output -join "`n"
+
+        if ($LASTEXITCODE -ne 0 -or $text -match '(?i)error|failed|incorrect parameter|cannot|unable to') {
+            throw "diskpart reported a problem:`n$text"
         }
+
+        return $text
     }
     finally {
-        Remove-Item -LiteralPath $diskpartScript -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $scriptFile -Force -ErrorAction SilentlyContinue
     }
 }
 
 function Initialize-RestoreUsbPartitions {
+    # Everything destructive/creative happens inside one diskpart script rather than
+    # mixing diskpart for the wipe with the PowerShell Storage cmdlets for the rest -
+    # doing the wipe via diskpart and then immediately reading/creating partitions via
+    # Get-Disk/Initialize-Disk/New-Partition hit a "disk has already been initialized"
+    # error on real hardware, twice, most likely a stale-state race between the two
+    # different tools talking to the same underlying storage stack. Keeping the whole
+    # sequence inside diskpart avoids that handoff entirely.
     param([Parameter(Mandatory)] $Disk)
 
-    Write-Log "Wiping disk $($Disk.Number)..."
-    Clear-DiskCompletely -DiskNumber $Disk.Number
-    Initialize-Disk -Number $Disk.Number -PartitionStyle GPT -ErrorAction Stop
+    Write-Log "Partitioning disk $($Disk.Number) via diskpart (wipe, GPT, boot + image partitions)..."
+    Invoke-DiskpartScript -Commands @(
+        "select disk $($Disk.Number)",
+        "clean",
+        "convert gpt",
+        "create partition efi size=1024",
+        "format fs=fat32 quick label=`"IGP-RESTORE`"",
+        "assign",
+        "create partition primary",
+        "format fs=ntfs quick label=`"IMAGES`"",
+        "assign"
+    ) | Out-Null
 
-    Write-Log "Creating boot partition (1 GB, FAT32, EFI System Partition)..."
-    $bootPartition = New-Partition -DiskNumber $Disk.Number -Size 1GB -GptType $script:EspGptType -AssignDriveLetter -ErrorAction Stop
-    Format-Volume -Partition $bootPartition -FileSystem FAT32 -NewFileSystemLabel 'IGP-RESTORE' -Confirm:$false -ErrorAction Stop | Out-Null
+    # Force Windows to re-read the disk's layout rather than trust a cached view from
+    # before diskpart ran, then give it a moment to finish assigning drive letters.
+    Update-Disk -Number $Disk.Number -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
 
-    Write-Log "Creating image partition (remaining space, NTFS)..."
-    $imagePartition = New-Partition -DiskNumber $Disk.Number -UseMaximumSize -AssignDriveLetter -ErrorAction Stop
-    Format-Volume -Partition $imagePartition -FileSystem NTFS -NewFileSystemLabel 'IMAGES' -Confirm:$false -ErrorAction Stop | Out-Null
+    $partitions = @(Get-Partition -DiskNumber $Disk.Number -ErrorAction Stop)
+    $bootPartition = $partitions | Where-Object { $_.GptType -eq $script:EspGptType } | Select-Object -First 1
+    $imagePartition = $partitions | Where-Object { $_.DriveLetter -and $_.PartitionNumber -ne $bootPartition.PartitionNumber } | Select-Object -First 1
 
-    $bootPartition = Get-Partition -DiskNumber $Disk.Number -PartitionNumber $bootPartition.PartitionNumber
-    $imagePartition = Get-Partition -DiskNumber $Disk.Number -PartitionNumber $imagePartition.PartitionNumber
+    if (-not $bootPartition -or -not $bootPartition.DriveLetter -or -not $imagePartition) {
+        throw "Could not identify the boot/image partitions with drive letters after partitioning disk $($Disk.Number)."
+    }
 
     return [pscustomobject]@{
         BootDriveLetter  = $bootPartition.DriveLetter
