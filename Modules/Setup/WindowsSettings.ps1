@@ -1027,12 +1027,31 @@ function Install-BgInfoIfMissing {
     }
 }
 
+function Invoke-BgInfoNow {
+    param([Parameter(Mandatory)] [string]$BgiPath)
+
+    if (-not (Test-Path -LiteralPath $script:BgInfoExePath)) {
+        Write-Log "BGInfo executable not found; cannot run it now." 'WARN'
+        return
+    }
+
+    $arguments = "`"$BgiPath`" /timer:0 /silent /nolicprompt"
+    try {
+        Start-Process -FilePath $script:BgInfoExePath -ArgumentList $arguments -WorkingDirectory $script:BgInfoDir -Wait -ErrorAction Stop
+        Write-Log "BGInfo applied now as a visual confirmation."
+    }
+    catch {
+        Write-Log "Failed to run BGInfo immediately: $($_.Exception.Message)" 'WARN'
+    }
+}
+
 function Sync-BgInfoAssetsForCurrentReseller {
-    # Stages the correct .bgi/.jpg + desktop wallpaper for whatever Reseller is
-    # currently set, independent of whether BGInfo Autostart itself is enabled -
-    # so Reseller Setup can call this unconditionally (files/wallpaper should
-    # always reflect the chosen brand) while only Enable-BgInfoAutostart below
-    # also touches the scheduled task.
+    # Stages the correct .bgi/.jpg for whatever Reseller is currently set, and runs
+    # BGInfo immediately as a visual confirmation - independent of whether BGInfo
+    # Autostart itself is enabled, so Reseller Setup can call this unconditionally
+    # (files should always reflect the chosen brand, and you should always see it
+    # applied right away) while only Enable-BgInfoAutostart below also touches the
+    # scheduled task.
     if (-not (Install-BgInfoIfMissing)) { return $null }
 
     $reseller = Get-ConfiguredReseller
@@ -1041,10 +1060,16 @@ function Sync-BgInfoAssetsForCurrentReseller {
         $reseller = 'IGP'
     }
 
-    return Copy-BgiAssets -Reseller $reseller
+    $bgiPath = Copy-BgiAssets -Reseller $reseller
+    if ($bgiPath) {
+        Invoke-BgInfoNow -BgiPath $bgiPath
+    }
+    return $bgiPath
 }
 
 function Enable-BgInfoAutostart {
+    # BGInfo has already been run once here (Sync-BgInfoAssetsForCurrentReseller ->
+    # Invoke-BgInfoNow) - this only additionally sets up the AtLogon scheduled task.
     $bgiPath = Sync-BgInfoAssetsForCurrentReseller
     if (-not $bgiPath) { return }
 
@@ -1071,16 +1096,6 @@ function Enable-BgInfoAutostart {
     Write-Log "Enabling BGInfo autostart at logon (config: $([System.IO.Path]::GetFileName($bgiPath)))..."
     Register-ScheduledTask -TaskName $name -InputObject $task -Force -ErrorAction Stop | Out-Null
     Write-Log "BGInfo autostart enabled (task: '$name')."
-
-    # Run it now too, not just at next logon - an immediate visual confirmation that the
-    # right branding actually applied, rather than waiting to see it until signing back in.
-    try {
-        Start-Process -FilePath $script:BgInfoExePath -ArgumentList $arguments -WorkingDirectory $script:BgInfoDir -Wait -ErrorAction Stop
-        Write-Log "BGInfo applied now as a visual confirmation."
-    }
-    catch {
-        Write-Log "Enabled, but failed to run BGInfo immediately: $($_.Exception.Message)" 'WARN'
-    }
 }
 
 function Disable-BgInfoAutostart {

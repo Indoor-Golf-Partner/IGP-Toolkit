@@ -16,14 +16,16 @@
   re-running either option to switch brands never overwrites a real
   value already filled in for those three.
 
-  Every run also stages the correct igp/gss .bgi, wallpaper, and cleans
-  up the other brand's stale files in C:\Utilities\bginfo (via Windows
-  Settings' Sync-BgInfoAssetsForCurrentReseller, called cross-module the
-  same isolated-dot-source way Startup Options/Overview already do) -
-  regardless of whether BGInfo Autostart itself is turned on, so the
-  files/wallpaper always reflect the chosen brand. If BGInfo Autostart is
-  already enabled, its scheduled task is also re-pointed and run
-  immediately as a visual confirmation.
+  Every run also stages the correct igp/gss .bgi + image and runs BGInfo
+  immediately as a visual confirmation (via Windows Settings' Sync-BgInfo
+  AssetsForCurrentReseller, called cross-module the same isolated-
+  dot-source way Startup Options/Overview already do), and cleans up the
+  other brand's stale files in C:\Utilities\bginfo - regardless of
+  whether BGInfo Autostart itself is turned on, so the staged files
+  always reflect the chosen brand and you see it applied right away
+  either way. If BGInfo Autostart is already enabled, its scheduled task
+  is also re-pointed (via Windows Settings' Enable-BgInfoAutostart
+  instead, to avoid staging/running BGInfo twice).
 
   Enabling/disabling BIOS serial write-back at startup (Scheduled Task
   "IGP Write Serial") is managed from the toolkit's Startup Options module
@@ -89,22 +91,27 @@ function Invoke-InModuleScope {
 }
 
 function Sync-BgInfoBranding {
-    # Always stage the correct .bgi/.jpg + desktop wallpaper for the new Reseller value,
-    # regardless of whether BGInfo Autostart itself is turned on - so the files are ready
-    # to go the moment that toggle IS enabled, and the wallpaper reflects the chosen
-    # brand immediately either way.
-    Write-Log "Staging BGInfo assets (.bgi/.jpg + wallpaper) for the new Reseller value..."
-    Invoke-InModuleScope -ModulePath $script:WindowsSettingsPath -FunctionName 'Sync-BgInfoAssetsForCurrentReseller' | Out-Null
-
-    # If BGInfo Autostart is already enabled, also re-point its scheduled task and run it
-    # immediately as a visual confirmation - same logic Windows Settings' own "Enable"
-    # already runs, just triggered here too, so a PC switched from one reseller to the
-    # other doesn't keep showing the old brand until someone thinks to toggle it off/on.
+    # Always stage the correct .bgi/.jpg for the new Reseller value and run BGInfo
+    # immediately (visual confirmation) - regardless of whether BGInfo Autostart itself
+    # is turned on, so the files are ready the moment that toggle IS enabled, and you
+    # see the change applied right away either way.
+    #
+    # If BGInfo Autostart is already enabled, go straight to its full Enable function
+    # instead (which does the same staging + immediate run, plus re-points the scheduled
+    # task) rather than doing the staging twice - same logic Windows Settings' own
+    # "Enable" already runs, just triggered here too, so a PC switched from one reseller
+    # to the other doesn't keep showing the old brand until someone thinks to toggle
+    # BGInfo off and back on.
     $existingTask = Invoke-InModuleScope -ModulePath $script:WindowsSettingsPath -FunctionName 'Get-ExistingBgInfoAutostartTask'
-    if (-not $existingTask) { return }
 
-    Write-Log "BGInfo Autostart is enabled - re-syncing its scheduled task too..."
-    Invoke-InModuleScope -ModulePath $script:WindowsSettingsPath -FunctionName 'Enable-BgInfoAutostart' | Out-Null
+    if ($existingTask) {
+        Write-Log "BGInfo Autostart is enabled - re-syncing its branding and scheduled task..."
+        Invoke-InModuleScope -ModulePath $script:WindowsSettingsPath -FunctionName 'Enable-BgInfoAutostart' | Out-Null
+    }
+    else {
+        Write-Log "Staging BGInfo assets (.bgi/.jpg) for the new Reseller value..."
+        Invoke-InModuleScope -ModulePath $script:WindowsSettingsPath -FunctionName 'Sync-BgInfoAssetsForCurrentReseller' | Out-Null
+    }
 }
 
 function Get-PreservedOrDefault {
