@@ -87,18 +87,24 @@
   of a Startup-folder shortcut. BGInfo Autostart downloads and extracts
   BGInfo from the official Sysinternals source into C:\Utilities\bginfo if
   not already present. Copying igp.bgi/gss.bgi (based on the "Reseller"
-  value written by the Reseller Setup module) and the matching wallpaper
-  is factored into Sync-BgInfoAssetsForCurrentReseller, called both by
+  value written by the Reseller Setup module) and the matching image is
+  factored into Sync-BgInfoAssetsForCurrentReseller, called both by
   Enable-BgInfoAutostart here and directly by Reseller Setup every time
   it runs (cross-module, regardless of whether BGInfo Autostart itself is
-  enabled) - so the staged files/wallpaper always reflect the chosen
-  brand, not just once autostart is turned on. The wallpaper is applied
-  to the current user (HKCU) - the .bgi configs are expected to use
-  BGInfo's "Use Current Wallpaper" option rather than a hardcoded
-  background path. Copying also removes the other brand's stale
-  .bgi/.jpg from C:\Utilities\bginfo. If BGInfo Autostart is already
-  enabled when Reseller Setup runs, its scheduled task is also
-  re-pointed and BGInfo is run immediately as a visual confirmation.
+  enabled) - so the staged files always reflect the chosen brand, not
+  just once autostart is turned on. The desktop wallpaper itself is set
+  by BGInfo, not by this toolkit - each .bgi's Desktop Background is
+  configured as "Specify a file" pointing at C:\Utilities\bginfo\igp.jpg
+  or gss.jpg (the exact path this code copies the image to), so BGInfo
+  applies it every time it runs. This replaced an earlier "Use Current
+  Wallpaper" + toolkit-sets-the-wallpaper design after that combination
+  proved to render a black background regardless of the image, for
+  reasons never fully pinned down - pointing the .bgi straight at a
+  fixed file sidesteps whatever that was. Copying also removes the other
+  brand's stale .bgi/.jpg from C:\Utilities\bginfo. If BGInfo Autostart
+  is already enabled when Reseller Setup runs, its scheduled task is
+  also re-pointed and BGInfo is run immediately as a visual confirmation
+  (which now also visibly sets the correct wallpaper).
 
 .NOTES
   Requires Administrator privileges.
@@ -941,37 +947,6 @@ function Get-ConfiguredReseller {
     return $null
 }
 
-function Set-DesktopWallpaper {
-    param([Parameter(Mandatory)] [string]$ImagePath)
-
-    if (-not (Test-Path -LiteralPath $ImagePath)) {
-        Write-Log "Wallpaper image not found: $ImagePath" 'WARN'
-        return
-    }
-
-    try {
-        Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name Wallpaper -Value $ImagePath -Force
-
-        if (-not ('IGPToolkit.NativeMethods' -as [type])) {
-            Add-Type -Name NativeMethods -Namespace IGPToolkit -MemberDefinition @'
-[DllImport("user32.dll", CharSet = CharSet.Auto)]
-public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
-'@
-        }
-
-        $SPI_SETDESKWALLPAPER = 0x0014
-        $SPIF_UPDATEINIFILE   = 0x01
-        $SPIF_SENDCHANGE      = 0x02
-
-        [IGPToolkit.NativeMethods]::SystemParametersInfo($SPI_SETDESKWALLPAPER, 0, $ImagePath, ($SPIF_UPDATEINIFILE -bor $SPIF_SENDCHANGE)) | Out-Null
-
-        Write-Log "Desktop wallpaper set to '$ImagePath'."
-    }
-    catch {
-        Write-Log "Failed to set desktop wallpaper: $($_.Exception.Message)" 'ERROR'
-    }
-}
-
 function Remove-StaleBgiAssets {
     param([Parameter(Mandatory)] [string]$KeepPrefix)
 
@@ -1007,7 +982,9 @@ function Copy-BgiAssets {
     if (Test-Path -LiteralPath $sourceJpg) {
         $destJpg = Join-Path $script:BgInfoDir "$prefix.jpg"
         Copy-Item -LiteralPath $sourceJpg -Destination $destJpg -Force
-        Set-DesktopWallpaper -ImagePath $destJpg
+        # The .bgi itself points its Desktop Background at this exact path (Specify a
+        # file, not "Use Current Wallpaper") and sets it when BGInfo runs - no need to
+        # set the wallpaper ourselves here.
     }
     else {
         Write-Log "No background image found in toolkit resources for '$prefix' ($sourceJpg); wallpaper left unchanged." 'WARN'
