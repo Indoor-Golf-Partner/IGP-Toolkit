@@ -66,7 +66,7 @@ $script:SftpUser         = 'sftpuser'
 $script:SshKeyDir        = 'C:\ProgramData\Indoor Golf Partner\ssh'
 $script:SshKeyPath       = Join-Path $script:SshKeyDir 'igp_images'
 $script:KnownHostsPath   = Join-Path $script:ToolkitRoot 'resources\ssh\known_hosts'
-$script:RemoteImagesDir  = '/deploy/Current'
+$script:RemoteImagesDir  = '/deploy/current'
 $script:RemoteRestoreKit = '/deploy/igprestore/igprestore.zip'
 
 # Well-known SIDs (not localized names) for the same reason the power plan lookup
