@@ -19,14 +19,14 @@ function Show-ToolkitBanner {
     }
 
     Write-Host ""
-    Write-Host ("╔" + ("═" * $innerWidth) + "╗") -ForegroundColor Cyan
-    Write-Host "║" -ForegroundColor Cyan -NoNewline
+    Write-Host ("=" * ($innerWidth + 2)) -ForegroundColor Cyan
+    Write-Host "|" -ForegroundColor Cyan -NoNewline
     Write-Host (Get-CenteredLine $title $innerWidth) -ForegroundColor White -NoNewline
-    Write-Host "║" -ForegroundColor Cyan
-    Write-Host "║" -ForegroundColor Cyan -NoNewline
+    Write-Host "|" -ForegroundColor Cyan
+    Write-Host "|" -ForegroundColor Cyan -NoNewline
     Write-Host (Get-CenteredLine $versionText $innerWidth) -ForegroundColor DarkGray -NoNewline
-    Write-Host "║" -ForegroundColor Cyan
-    Write-Host ("╚" + ("═" * $innerWidth) + "╝") -ForegroundColor Cyan
+    Write-Host "|" -ForegroundColor Cyan
+    Write-Host ("=" * ($innerWidth + 2)) -ForegroundColor Cyan
     Write-Host ""
 }
 
