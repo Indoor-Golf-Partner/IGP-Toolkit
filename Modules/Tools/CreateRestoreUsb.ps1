@@ -10,7 +10,7 @@
     3) Connect over SFTP to deploy.igpartner.dk:2223 as sftpuser, using the
        igp_images private key and a shipped known_hosts file (no interactive
        host-key prompt, no StrictHostKeyChecking=no either).
-    4) List the available baseline images under /deploy/Current/ on the
+    4) List the available baseline images under /deploy/current/ on the
        server and let you pick one.
     5) Wipe and partition the USB as GPT:
          - Partition 1: 1 GB, EFI System Partition type, FAT32, label
@@ -404,17 +404,22 @@ function Initialize-RestoreUsbPartitions {
     # diskpart.exe's own CLI refuses "create partition efi"/format on media flagged
     # removable ("The operation is not supported on removable media" - confirmed on real
     # hardware), even though the same disk fully supports a GPT ESP partition when
-    # created the normal way. So diskpart is used ONLY for "clean" (which genuinely
-    # resets the disk to RAW - Clear-Disk alone doesn't reliably do that, confirmed
-    # separately on real hardware); everything else goes back to the native PowerShell
-    # Storage cmdlets, which got past this exact step cleanly before diskpart was
-    # involved at all.
+    # created the normal way. So diskpart is used ONLY for wiping the disk; everything
+    # else goes back to the native PowerShell Storage cmdlets, which got past this exact
+    # step cleanly before diskpart was involved at all.
+    #
+    # Plain "clean" only wipes the front of the disk and can leave the backup GPT header
+    # at the very end intact - confirmed on real hardware: the disk still reported as
+    # GPT-initialized (never RAW) after a plain clean, even with Update-Disk/polling
+    # ruling out a caching delay. "clean all" zeroes every sector, guaranteeing no
+    # leftover GPT signature survives - much slower (writes to the whole drive, not just
+    # the first few sectors) but the only way that's actually reliable here.
     param([Parameter(Mandatory)] $Disk)
 
-    Write-Log "Wiping disk $($Disk.Number) via diskpart..."
+    Write-Log "Wiping disk $($Disk.Number) via diskpart (clean all - this writes zeros to the entire drive, so it can take several minutes)..."
     Invoke-DiskpartScript -Commands @(
         "select disk $($Disk.Number)",
-        "clean"
+        "clean all"
     ) | Out-Null
 
     Wait-DiskRaw -DiskNumber $Disk.Number
@@ -494,11 +499,6 @@ function RunModule {
     $disk = Select-UsbDisk
     if (-not $disk) { return }
 
-    if (-not (Confirm-UsbWipe -Disk $disk)) {
-        Write-Log "Cancelled - nothing was changed." 'WARN'
-        return
-    }
-
     Write-Log "Connecting to $($script:SftpHost):$($script:SftpPort)..."
     $images = @()
     try {
@@ -534,8 +534,9 @@ function RunModule {
     $imageName = $map[$sel]
 
     # Everything above only reads from the server and the disk list - nothing
-    # destructive has happened yet. Re-confirm right here, immediately before the
-    # actual wipe, since picking the drive happened a couple of prompts ago.
+    # destructive has happened yet. This is the one and only wipe confirmation,
+    # placed here (not right after picking the drive) so it's the last thing that
+    # happens before anything irreversible actually does.
     if (-not (Confirm-UsbWipe -Disk $disk)) {
         Write-Log "Cancelled - nothing was changed." 'WARN'
         return
