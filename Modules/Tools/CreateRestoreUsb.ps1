@@ -380,6 +380,26 @@ function Invoke-DiskpartScript {
     }
 }
 
+function Wait-DiskRaw {
+    # After an external diskpart.exe process cleans the disk, PowerShell's Storage
+    # cmdlets can still report a stale cached view of it for a moment - confirmed on
+    # real hardware: Initialize-Disk immediately after diskpart's clean failed with
+    # "The disk has already been initialized" even though diskpart just cleaned it.
+    # Update-Disk forces a refresh; poll until the cache actually catches up rather than
+    # trusting a fixed delay.
+    param([Parameter(Mandatory)] [int]$DiskNumber, [int]$TimeoutSeconds = 15)
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        Update-Disk -Number $DiskNumber -ErrorAction SilentlyContinue
+        $disk = Get-Disk -Number $DiskNumber -ErrorAction SilentlyContinue
+        if ($disk -and $disk.PartitionStyle -eq 'RAW') { return }
+        Start-Sleep -Seconds 1
+    }
+
+    throw "Disk $DiskNumber still doesn't report as RAW (uninitialized) $TimeoutSeconds seconds after diskpart cleaned it - PowerShell's Storage cmdlets may be seeing stale cached state."
+}
+
 function Initialize-RestoreUsbPartitions {
     # diskpart.exe's own CLI refuses "create partition efi"/format on media flagged
     # removable ("The operation is not supported on removable media" - confirmed on real
@@ -397,6 +417,7 @@ function Initialize-RestoreUsbPartitions {
         "clean"
     ) | Out-Null
 
+    Wait-DiskRaw -DiskNumber $Disk.Number
     Initialize-Disk -Number $Disk.Number -PartitionStyle GPT -ErrorAction Stop
 
     Write-Log "Creating boot partition (1 GB, FAT32, EFI System Partition)..."
