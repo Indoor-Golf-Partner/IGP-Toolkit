@@ -49,6 +49,22 @@ $script:IGPRegistryBaseKey = 'HKLM:\SOFTWARE\Indoor Golf Partner\IGP'
 function Set-WindowsAccountName {
     $currentName = $env:USERNAME
 
+    # Rename-LocalUser only works on true local (SAM) accounts. If this session is
+    # domain-joined or signed in with a Microsoft/work account, $env:USERNAME reflects
+    # that identity but there's no matching local account - check for that up front
+    # rather than letting a cryptic "User X was not found" surface after already
+    # asking for a new name.
+    if ($env:USERDOMAIN -and $env:USERDOMAIN -ne $env:COMPUTERNAME) {
+        Write-Log "Signed in as '$env:USERDOMAIN\$currentName', not a local Windows account - this only works for local accounts (no domain, no Microsoft/work account sign-in)." 'ERROR'
+        return
+    }
+
+    $localUser = Get-LocalUser -Name $currentName -ErrorAction SilentlyContinue
+    if (-not $localUser) {
+        Write-Log "No local account named '$currentName' was found. This only works for local Windows accounts." 'ERROR'
+        return
+    }
+
     $newName = Read-Host "New account name for '$currentName'"
     if ([string]::IsNullOrWhiteSpace($newName)) {
         Write-Log "No name entered. Cancelled." 'WARN'
