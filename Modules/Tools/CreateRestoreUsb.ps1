@@ -5,7 +5,7 @@
 
 .DESCRIPTION
   Walks through:
-    1) Pick a USB drive (>= 64 GB, removable, never the boot/system disk).
+    1) Pick a USB drive (>= 50 GB, removable, never the boot/system disk).
     2) Warn that the drive will be completely wiped.
     3) Connect over SFTP to deploy.igpartner.dk:2223 as sftp_user, using the
        igp_images private key and a shipped known_hosts file (no interactive
@@ -78,7 +78,7 @@ $script:SidAdministrators = '*S-1-5-32-544'
 # GPT partition type GUID for an EFI System Partition.
 $script:EspGptType = '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}'
 
-$script:MinUsbSizeBytes = 64GB
+$script:MinUsbSizeBytes = 50GB
 
 # ---------------------------------------------------------------------------
 # SSH key / OpenSSH client setup
