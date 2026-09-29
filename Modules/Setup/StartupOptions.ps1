@@ -6,11 +6,12 @@
 .DESCRIPTION
   Lists every startup toggle the toolkit knows about, with live
   Enabled/Disabled status, and lets you flip any of them:
-    1) Clear Trackman Cache at Startup   (Trackman Storage)
-    2) Auto-update Toolkit at Startup    (Update IGP Toolkit)
-    3) Write Serial Number at Startup    (Reseller Setup)
-    4) TrackMan Autostart                (Windows Settings)
-    5) BGInfo Autostart                  (Windows Settings)
+    1) Run IGP Toolkit at Startup        (this file)
+    2) Clear Trackman Cache at Startup   (Trackman Storage)
+    3) Auto-update Toolkit at Startup    (Update IGP Toolkit)
+    4) Write Serial Number at Startup    (Reseller Setup)
+    5) TrackMan Autostart                (Windows Settings)
+    6) BGInfo Autostart                  (Windows Settings)
 
   Each toggle's actual scheduled-task logic (what it runs, how it's
   registered/removed) still lives entirely in its own module - this hub
@@ -21,6 +22,18 @@
   in its own throwaway scope, modules that all define same-named helpers
   (Write-Log, Test-IsAdmin, etc.) never collide with each other or with
   this hub.
+
+  Run IGP Toolkit at Startup is the one exception with nowhere else to
+  live - it points straight at Run-IGPToolkit.ps1 rather than calling
+  into a function defined by it, so its own Get-Existing/Enable/Disable
+  functions are defined right here instead. Its scheduled task is
+  registered with RunLevel Highest for BUILTIN\Administrators - Task
+  Scheduler launches tasks like that pre-elevated, so it opens with no
+  UAC prompt (unlike a normal double-click launch, which hits
+  Run-IGPToolkit.ps1's own Ensure-RunningAsAdmin relaunch-and-prompt
+  logic). That only works for accounts that are already local
+  Administrators, which every machine this toolkit runs on requires
+  anyway.
 
 .NOTES
   Requires Administrator privileges.
@@ -43,10 +56,64 @@ function Test-IsAdmin {
 
 # $PSScriptRoot here is Modules\Setup, so the toolkit root is two levels up.
 $script:ToolkitRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$script:ToolkitLauncherPath = Join-Path $script:ToolkitRoot 'Run-IGPToolkit.ps1'
+
+function Get-ToolkitAutostartTaskName {
+    return 'IGP-Toolkit-Autostart'
+}
+
+function Get-ExistingToolkitAutostartTask {
+    Get-ScheduledTask -TaskName (Get-ToolkitAutostartTaskName) -ErrorAction SilentlyContinue
+}
+
+function Enable-ToolkitAutostart {
+    $name = Get-ToolkitAutostartTaskName
+    $existing = Get-ExistingToolkitAutostartTask
+    if ($existing) {
+        try { Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction Stop }
+        catch { throw "Failed to remove existing task '$name': $($_.Exception.Message)" }
+    }
+
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$script:ToolkitLauncherPath`""
+    $action    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments
+
+    # AtLogOn with no -User fires for any interactive logon matching the principal
+    # below (same pattern as TrackMan/BGInfo Autostart) - here that's members of
+    # BUILTIN\Administrators. RunLevel Highest is what lets Task Scheduler launch it
+    # already elevated, with no UAC prompt.
+    $trigger   = New-ScheduledTaskTrigger -AtLogOn
+    $principal = New-ScheduledTaskPrincipal -GroupId "BUILTIN\Administrators" -RunLevel Highest
+    $settings  = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings
+
+    Write-Log "Enabling IGP Toolkit autostart at logon..."
+    Register-ScheduledTask -TaskName $name -InputObject $task -Force -ErrorAction Stop | Out-Null
+    Write-Log "IGP Toolkit autostart enabled (task: '$name')."
+}
+
+function Disable-ToolkitAutostart {
+    $name = Get-ToolkitAutostartTaskName
+    $existing = Get-ExistingToolkitAutostartTask
+    if (-not $existing) {
+        Write-Log "IGP Toolkit autostart is already disabled."
+        return
+    }
+    Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction Stop
+    Write-Log "IGP Toolkit autostart disabled."
+}
 
 # Each entry's own module owns its scheduled-task logic; this hub only calls
-# into it by name (see Invoke-InModuleScope).
+# into it by name (see Invoke-InModuleScope). "Run IGP Toolkit at Startup" is the
+# one exception - it points at this file itself, since Get-ExistingToolkitAutostartTask/
+# Enable-ToolkitAutostart/Disable-ToolkitAutostart are defined right above.
 $script:StartupToggles = @(
+    [pscustomobject]@{
+        Title     = 'Run IGP Toolkit at Startup'
+        Path      = Join-Path $script:ToolkitRoot 'Modules\Setup\StartupOptions.ps1'
+        StatusFn  = 'Get-ExistingToolkitAutostartTask'
+        EnableFn  = 'Enable-ToolkitAutostart'
+        DisableFn = 'Disable-ToolkitAutostart'
+    }
     [pscustomobject]@{
         Title     = 'Clear Trackman Cache at Startup'
         Path      = Join-Path $script:ToolkitRoot 'Modules\Repair\TrackmanStorage.ps1'
