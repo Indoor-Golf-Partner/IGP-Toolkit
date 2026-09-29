@@ -19,36 +19,6 @@ $ErrorActionPreference = 'Stop'
 $script:ModuleName    = 'Windows Debloater'
 $script:RequiresAdmin = $true
 
-#region Confirm Text (Mandatory)
-function Get-ConfirmText {
-    return @"
-$script:ModuleName
-
-This module does:
-- Removes common consumer Appx packages such as Teams, Xbox apps, OneNote app,
-  Office Hub, Clipchamp, and other preinstalled extras
-- Removes classic OneDrive when present
-- Disables Xbox-related services
-- Disables selected consumer scheduled tasks
-- Disables Windows consumer experiences, chat, widgets, and feed content
-
-It may change:
-- Installed Appx packages
-- Provisioned Appx packages for future users
-- OneDrive installation and startup entries
-- Service startup modes
-- Scheduled task state
-- Registry policy settings
-
-Recommended for:
-- Dedicated simulator / appliance-style PCs
-- Systems where consumer apps are not needed
-
-Press Y to continue.
-"@
-}
-#endregion Confirm Text
-
 #region Logging
 function Write-Log {
     param(
@@ -360,6 +330,26 @@ function Invoke-ModuleOperation {
 function Show-Menu {
     Clear-Host
     Write-Host $script:ModuleName
+    Write-Host ""
+    Write-Host "This module does:"
+    Write-Host "- Removes common consumer Appx packages such as Teams, Xbox apps, OneNote app,"
+    Write-Host "  Office Hub, Clipchamp, and other preinstalled extras"
+    Write-Host "- Removes classic OneDrive when present"
+    Write-Host "- Disables Xbox-related services"
+    Write-Host "- Disables selected consumer scheduled tasks"
+    Write-Host "- Disables Windows consumer experiences, chat, widgets, and feed content"
+    Write-Host ""
+    Write-Host "It may change:"
+    Write-Host "- Installed Appx packages"
+    Write-Host "- Provisioned Appx packages for future users"
+    Write-Host "- OneDrive installation and startup entries"
+    Write-Host "- Service startup modes"
+    Write-Host "- Scheduled task state"
+    Write-Host "- Registry policy settings"
+    Write-Host ""
+    Write-Host "Recommended for dedicated simulator/appliance-style PCs where consumer"
+    Write-Host "apps are not needed."
+    Write-Host ""
     Write-Host '1) Run debloat routine'
     Write-Host 'Q) Back'
 }

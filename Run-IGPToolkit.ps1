@@ -4,6 +4,31 @@ if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
     throw "Cannot determine script path. Run this as a file: powershell -File <path>\Run-IGPToolkit.ps1"
 }
 $ToolkitRoot = Split-Path -Parent $ScriptPath
+$ToolkitVersion = '2.0.0'
+
+function Show-ToolkitBanner {
+    $title = "IGP TOOLKIT"
+    $versionText = "v$ToolkitVersion"
+    $innerWidth = [Math]::Max($title.Length, $versionText.Length) + 8
+
+    function Get-CenteredLine([string]$Text, [int]$Width) {
+        $padTotal = [Math]::Max(0, $Width - $Text.Length)
+        $padLeft  = [Math]::Floor($padTotal / 2)
+        $padRight = $padTotal - $padLeft
+        return (' ' * $padLeft) + $Text + (' ' * $padRight)
+    }
+
+    Write-Host ""
+    Write-Host ("=" * ($innerWidth + 2)) -ForegroundColor Cyan
+    Write-Host "|" -ForegroundColor Cyan -NoNewline
+    Write-Host (Get-CenteredLine $title $innerWidth) -ForegroundColor White -NoNewline
+    Write-Host "|" -ForegroundColor Cyan
+    Write-Host "|" -ForegroundColor Cyan -NoNewline
+    Write-Host (Get-CenteredLine $versionText $innerWidth) -ForegroundColor DarkGray -NoNewline
+    Write-Host "|" -ForegroundColor Cyan
+    Write-Host ("=" * ($innerWidth + 2)) -ForegroundColor Cyan
+    Write-Host ""
+}
 
 function Test-IsAdmin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -70,31 +95,63 @@ function Invoke-Module {
     } $ModulePath
 }
 
+# Fixed display order for menu categories (anything not listed falls back to
+# alphabetical, after these).
+$CategoryOrder = @('Repair', 'Operation', 'Setup', 'Toolkit')
+
+# Fixed display order for items within a category, by Title (anything not listed
+# falls back to alphabetical, after these). Only Setup needs one so far; other
+# categories just fall through to alphabetical unaffected.
+$TitleOrder = @(
+    'Machine Identity',
+    'Reseller Setup',
+    'Windows Settings',
+    'Debloater',
+    'Startup Options',
+    'Overview'
+)
+
 # Manual registry
 $ModuleRegistry = @(
     @{
-        Path  = "Modules\Trackman\ResetTrackManSettings.ps1"
-        Title = "Reset TrackMan Settings"
+        Path  = "Modules\Repair\TrackmanStorage.ps1"
+        Title = "Trackman Storage"
     },
     @{
-        Path  = "Modules\Windows\ResetTouchScreen.ps1"
+        Path  = "Modules\Repair\ResetTouchScreen.ps1"
         Title = "Reset Touch Screen Calibration"
-    }, 
+    },
     @{
-        Path  = "Modules\Windows\RepairWindowsImage.ps1"
+        Path  = "Modules\Repair\RepairWindowsImage.ps1"
         Title = "Repair Windows System Files (DISM + SFC)"
     },
-    @{
-        Path  = "Modules\Windows\debloater.ps1"
-        Title = "Debloater"
-    },  
     @{
         Path  = "Modules\Operation\autoshutdown.ps1"
         Title = "Manage automatic shutdown"
     },
     @{
-        Path  = "Modules\Trackman\ClearTrackmanCache.ps1"
-        Title = "Clear Trackman Cache"
+        Path  = "Modules\Setup\WindowsSettings.ps1"
+        Title = "Windows Settings"
+    },
+    @{
+        Path  = "Modules\Setup\Reseller.ps1"
+        Title = "Reseller Setup"
+    },
+    @{
+        Path  = "Modules\Setup\MachineIdentity.ps1"
+        Title = "Machine Identity"
+    },
+    @{
+        Path  = "Modules\Setup\StartupOptions.ps1"
+        Title = "Startup Options"
+    },
+    @{
+        Path  = "Modules\Setup\debloater.ps1"
+        Title = "Debloater"
+    },
+    @{
+        Path  = "Modules\Setup\Overview.ps1"
+        Title = "Overview"
     },
     @{
         Path  = "Modules\Toolkit\updatetoolkit.ps1"
@@ -117,16 +174,31 @@ $items = foreach ($m in $ModuleRegistry) {
 
 while ($true) {
     Clear-Host
-    Write-Host "IGP Toolkit Menu"
+    Show-ToolkitBanner
     Write-Host "Root: $ToolkitRoot"
     Write-Host ""
 
     $map = @{}
     $i = 1
 
-    foreach ($g in ($items | Sort-Object Category, Title | Group-Object Category)) {
-        Write-Host "--- $($g.Name) ---"
-        foreach ($it in $g.Group) {
+    # Group-Object always re-sorts its output groups alphabetically by key, regardless
+    # of upstream Sort-Object order - so the category display order is built explicitly
+    # here instead of relying on Group-Object's own ordering.
+    $categoryRank = {
+        $idx = $CategoryOrder.IndexOf($_)
+        if ($idx -ge 0) { $idx } else { [int]::MaxValue }
+    }
+    $orderedCategories = $items.Category | Select-Object -Unique | Sort-Object $categoryRank, { $_ }
+
+    $titleRank = {
+        $idx = $TitleOrder.IndexOf($_.Title)
+        if ($idx -ge 0) { $idx } else { [int]::MaxValue }
+    }
+
+    foreach ($catName in $orderedCategories) {
+        Write-Host "--- $catName ---"
+        $group = $items | Where-Object { $_.Category -eq $catName } | Sort-Object $titleRank, Title
+        foreach ($it in $group) {
             Write-Host ("{0,2}) {1}" -f $i, $it.Title)
             $map["$i"] = $it.FullPath
             $i++
