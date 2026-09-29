@@ -4,6 +4,31 @@ if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
     throw "Cannot determine script path. Run this as a file: powershell -File <path>\Run-IGPToolkit.ps1"
 }
 $ToolkitRoot = Split-Path -Parent $ScriptPath
+$ToolkitVersion = '1.0.0'
+
+function Show-ToolkitBanner {
+    $title = "IGP TOOLKIT"
+    $versionText = "v$ToolkitVersion"
+    $innerWidth = [Math]::Max($title.Length, $versionText.Length) + 8
+
+    function Get-CenteredLine([string]$Text, [int]$Width) {
+        $padTotal = [Math]::Max(0, $Width - $Text.Length)
+        $padLeft  = [Math]::Floor($padTotal / 2)
+        $padRight = $padTotal - $padLeft
+        return (' ' * $padLeft) + $Text + (' ' * $padRight)
+    }
+
+    Write-Host ""
+    Write-Host ("╔" + ("═" * $innerWidth) + "╗") -ForegroundColor Cyan
+    Write-Host "║" -ForegroundColor Cyan -NoNewline
+    Write-Host (Get-CenteredLine $title $innerWidth) -ForegroundColor White -NoNewline
+    Write-Host "║" -ForegroundColor Cyan
+    Write-Host "║" -ForegroundColor Cyan -NoNewline
+    Write-Host (Get-CenteredLine $versionText $innerWidth) -ForegroundColor DarkGray -NoNewline
+    Write-Host "║" -ForegroundColor Cyan
+    Write-Host ("╚" + ("═" * $innerWidth) + "╝") -ForegroundColor Cyan
+    Write-Host ""
+}
 
 function Test-IsAdmin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -149,7 +174,7 @@ $items = foreach ($m in $ModuleRegistry) {
 
 while ($true) {
     Clear-Host
-    Write-Host "IGP Toolkit Menu"
+    Show-ToolkitBanner
     Write-Host "Root: $ToolkitRoot"
     Write-Host ""
 
