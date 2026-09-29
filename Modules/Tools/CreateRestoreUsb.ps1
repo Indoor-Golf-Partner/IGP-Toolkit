@@ -356,11 +356,35 @@ function Confirm-UsbWipe {
     return ($typed -ceq 'ERASE')
 }
 
+function Clear-DiskCompletely {
+    # Clear-Disk removes partitions/data but doesn't reliably reset PartitionStyle back
+    # to RAW - a disk that was already GPT-partitioned from a previous build can still
+    # report as "already initialized" afterward, which makes Initialize-Disk fail.
+    # diskpart's "clean" genuinely resets the disk to a blank/uninitialized state.
+    param([Parameter(Mandatory)] [int]$DiskNumber)
+
+    $diskpartScript = [System.IO.Path]::GetTempFileName()
+    try {
+        Set-Content -LiteralPath $diskpartScript -Value @(
+            "select disk $DiskNumber",
+            "clean"
+        ) -Encoding ascii
+
+        $output = & diskpart.exe /s $diskpartScript 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "diskpart clean failed (exit code $LASTEXITCODE): $($output -join ' ')"
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $diskpartScript -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Initialize-RestoreUsbPartitions {
     param([Parameter(Mandatory)] $Disk)
 
     Write-Log "Wiping disk $($Disk.Number)..."
-    Clear-Disk -Number $Disk.Number -RemoveData -RemoveOEM -Confirm:$false -ErrorAction Stop
+    Clear-DiskCompletely -DiskNumber $Disk.Number
     Initialize-Disk -Number $Disk.Number -PartitionStyle GPT -ErrorAction Stop
 
     Write-Log "Creating boot partition (1 GB, FAT32, EFI System Partition)..."
