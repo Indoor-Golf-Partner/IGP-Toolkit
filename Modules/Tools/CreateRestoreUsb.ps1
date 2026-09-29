@@ -313,7 +313,7 @@ function Get-CandidateUsbDisks {
 }
 
 function Select-UsbDisk {
-    $disks = Get-CandidateUsbDisks
+    $disks = @(Get-CandidateUsbDisks)
     if ($disks.Count -eq 0) {
         Write-Log "No USB drive of at least $($script:MinUsbSizeBytes / 1GB) GB was found. Plug one in and try again." 'WARN'
         return $null
@@ -322,9 +322,12 @@ function Select-UsbDisk {
     Write-Host ""
     Write-Host "USB drives found:"
     $map = @{}
-    for ($i = 0; $i -lt $disks.Count; $i++) {
-        $d = $disks[$i]
-        $num = $i + 1
+    $num = 0
+    # foreach (not an indexed for loop) so this works identically whether $disks is a
+    # real array or - when Get-Disk only matches one drive - a single CIM instance that
+    # PowerShell may not treat as index-able the same way an array is.
+    foreach ($d in $disks) {
+        $num++
         $sizeGb = [Math]::Round($d.Size / 1GB, 1)
         Write-Host ("  {0}) Disk {1}: {2} ({3} GB)" -f $num, $d.Number, $d.FriendlyName, $sizeGb)
         $map["$num"] = $d
@@ -440,9 +443,9 @@ function RunModule {
     }
 
     Write-Log "Connecting to $($script:SftpHost):$($script:SftpPort)..."
-    $images = $null
+    $images = @()
     try {
-        $images = Get-RemoteImageFolders
+        $images = @(Get-RemoteImageFolders)
     }
     catch {
         Write-Log "Failed to connect or list images: $($_.Exception.Message)" 'ERROR'
@@ -457,10 +460,11 @@ function RunModule {
     Write-Host ""
     Write-Host "Available baseline images:"
     $map = @{}
-    for ($i = 0; $i -lt $images.Count; $i++) {
-        $num = $i + 1
-        Write-Host ("  {0}) {1}" -f $num, $images[$i].Name)
-        $map["$num"] = $images[$i].Name
+    $num = 0
+    foreach ($image in $images) {
+        $num++
+        Write-Host ("  {0}) {1}" -f $num, $image.Name)
+        $map["$num"] = $image.Name
     }
     Write-Host ""
 
